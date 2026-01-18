@@ -23,7 +23,7 @@ from crawl4ai.extraction_strategy import LLMExtractionStrategy
 # ==============================================================================
 
 # API Key for Gemini (Required for TMO Site)
-os.environ["GOOGLE_API_KEY"] = "AIzaSyBXzU2iIbOTWjiPsGyuXeT3aRwDampVps0"
+os.environ["GOOGLE_API_KEY"] = "Your API KEY"
 
 # Browser Identity (User-Agent) to mimic a real user
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
