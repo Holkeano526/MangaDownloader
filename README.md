@@ -24,7 +24,7 @@ Una herramienta todo-en-uno para descargar manga, doujinshi y cómics desde siti
 
 1.  **Clonar el repositorio:**
     ```bash
-    git clone https://github.com/tu-usuario/manga-downloader.git
+    git clone https://github.com/Holkeano526/MangaDownloader.git
     cd manga-downloader
     ```
 
