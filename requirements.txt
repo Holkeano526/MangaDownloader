@@ -5,3 +5,4 @@ playwright
 crawl4ai
 python-dotenv
 google-generativeai
+img2pdf
