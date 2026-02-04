@@ -1,5 +1,7 @@
+discord.py
 aiohttp
 Pillow
+playwright
 crawl4ai
-discord.py
 python-dotenv
+google-generativeai

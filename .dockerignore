@@ -1,0 +1,16 @@
+.env
+.venv
+env/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.log
+PDF/
+temp_manga_images/
+.git/
+.gitignore
+.dockerignore
+Dockerfile
+README.md
