@@ -93,8 +93,9 @@ def create_pdf(image_paths: List[str], output_pdf: str, log_callback: Callable[[
 
     try:
         # img2pdf es mucho más eficiente porque incrusta los bytes JPG directos sin re-codificar.
+        # rotation=img2pdf.Rotation.ifvalid evita errores con EXIF corruptos
         with open(output_pdf, "wb") as f:
-            f.write(img2pdf.convert(image_paths))
+            f.write(img2pdf.convert(image_paths, rotation=img2pdf.Rotation.ifvalid))
             
         log_callback(f"[EXITO] PDF Generado: {os.path.basename(output_pdf)}")
         return True
