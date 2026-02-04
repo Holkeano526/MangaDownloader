@@ -3,29 +3,27 @@ import os
 import shutil
 import re
 import json
-import threading
-import tkinter as tk
-from tkinter import ttk, scrolledtext, messagebox
 from typing import List, Optional, Callable
-
-# External libraries
 import aiohttp
 from PIL import Image
 from playwright.async_api import async_playwright
-
-# Crawl4AI imports
-from crawl4ai import AsyncWebCrawler, BrowserConfig, CrawlerRunConfig, CacheMode
+from crawl4ai import AsyncWebCrawler
 from crawl4ai.async_configs import LLMConfig
 from crawl4ai.extraction_strategy import LLMExtractionStrategy
+from dotenv import load_dotenv
 
 # ==============================================================================
-# CONFIGURATION & CONSTANTS
+# CONFIGURACIÓN & CONSTANTES
 # ==============================================================================
 
-# API Key for Gemini (Required for TMO Site)
-os.environ["GOOGLE_API_KEY"] = "AIzaSyCPU5pGI6_A_nOLEGKqRx7y7L7ABXfpheU"
+# Cargar variables de entorno
+load_dotenv()
 
-# Browser Identity (User-Agent) to mimic a real user
+# API Key Check
+if not os.getenv("GOOGLE_API_KEY"):
+    print("[WARN] GOOGLE_API_KEY no encontrada en .env")
+
+# Browser Identity
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
 # Site-Specific Headers
@@ -33,6 +31,7 @@ HEADERS_TMO = {"Referer": "https://tmohentai.com/", "User-Agent": USER_AGENT}
 HEADERS_M440 = {"Referer": "https://m440.in/", "User-Agent": USER_AGENT}
 HEADERS_H2R = {"Referer": "https://hentai2read.com/", "User-Agent": USER_AGENT}
 HEADERS_HITOMI = {"Referer": "https://hitomi.la/", "User-Agent": USER_AGENT}
+HEADERS_ZONATMO = {"Referer": "https://zonatmo.com/", "User-Agent": USER_AGENT}
 
 # Folder names
 TEMP_FOLDER_NAME = "temp_manga_images"
@@ -42,23 +41,33 @@ PDF_FOLDER_NAME = "PDF"
 BATCH_SIZE = 10
 DEFAULT_PAGE_COUNT = 60
 
+# CONFIGURACIÓN GLOBAL
+OPEN_RESULT_ON_FINISH = True  # El bot cambiará esto a False
+
 # ==============================================================================
 # SHARED UTILITIES
 # ==============================================================================
 
+def clean_filename(text: str) -> str:
+    """Elimina caracteres inválidos para nombres de archivo en Windows/Linux."""
+    if not text: return "untitled"
+    # Eliminar tags HTML si quedaron
+    text = re.sub(r'<[^>]+>', '', text)
+    # Eliminar caracteres prohibidos
+    safe = re.sub(r'[\\/*?:"<>|]', "", text).strip()
+    return safe if safe else "untitled"
+
 async def download_image(session: aiohttp.ClientSession, url: str, folder: str, index: int, log_callback: Callable[[str], None], headers: dict) -> Optional[str]:
-    """
-    Downloads a single image from a URL and saves it to the specified folder.
-    Returns the file path if successful, None otherwise.
-    """
+    """Descarga una sola imagen y retorna su ruta local."""
     try:
-        # Determine file extension based on URL
-        filename = f"{index:03d}.jpg" 
-        if ".webp" in url: filename = f"{index:03d}.webp"
-        elif ".png" in url: filename = f"{index:03d}.png"
-        elif ".jpeg" in url: filename = f"{index:03d}.jpeg"
-        elif ".avif" in url: filename = f"{index:03d}.avif"
+        # Determinar extensión (default jpg)
+        ext = ".jpg"
+        if ".webp" in url: ext = ".webp"
+        elif ".png" in url: ext = ".png"
+        elif ".jpeg" in url: ext = ".jpeg"
+        elif ".avif" in url: ext = ".avif"
         
+        filename = f"{index:03d}{ext}"
         filepath = os.path.join(folder, filename)
         
         async with session.get(url, headers=headers) as resp:
@@ -75,10 +84,7 @@ async def download_image(session: aiohttp.ClientSession, url: str, folder: str, 
         return None
 
 def create_pdf(image_paths: List[str], output_pdf: str, log_callback: Callable[[str], None]) -> bool:
-    """
-    Combines a list of image paths into a single PDF file.
-    Converts images to RGB mode (stripping alpha channel) to ensure compatibility.
-    """
+    """Compila una lista de rutas de imágenes en un único PDF."""
     if not image_paths:
         log_callback("[AVISO] No hay imágenes para compilar en el PDF.")
         return False
@@ -87,7 +93,7 @@ def create_pdf(image_paths: List[str], output_pdf: str, log_callback: Callable[[
     for path in image_paths:
         try:
             with Image.open(path) as img:
-                # Convert to RGB to support saving as PDF (handles png transparency etc)
+                # Convertir a RGB para compatibilidad con PDF (elimina Alpha channel si existe)
                 if img.mode in ("RGBA", "P"):
                     img = img.convert("RGB")
                     images.append(img)
@@ -98,7 +104,7 @@ def create_pdf(image_paths: List[str], output_pdf: str, log_callback: Callable[[
 
     if images:
         try:
-            # Save the first image and append the rest
+            # Guardar la primera imagen y adjuntar el resto
             images[0].save(output_pdf, "PDF", resolution=100.0, save_all=True, append_images=images[1:])
             log_callback(f"[EXITO] PDF Generado: {os.path.basename(output_pdf)}")
             return True
@@ -110,12 +116,7 @@ def create_pdf(image_paths: List[str], output_pdf: str, log_callback: Callable[[
         return False
 
 def finalize_pdf_flow(image_paths: List[str], pdf_name: str, log_callback: Callable[[str], None], temp_dir: Optional[str] = None):
-    """
-    Shared Logic: Creates PDF, Opens it/Folder, and Cleans up temp dir.
-    """
     current_dir = os.path.dirname(os.path.abspath(__file__))
-    
-    # Ensure PDF directory exists
     pdf_dir = os.path.join(current_dir, PDF_FOLDER_NAME)
     os.makedirs(pdf_dir, exist_ok=True)
     
@@ -123,41 +124,35 @@ def finalize_pdf_flow(image_paths: List[str], pdf_name: str, log_callback: Calla
     log_callback(f"[INFO] Generando PDF: {pdf_name}")
     
     if create_pdf(image_paths, output_pdf, log_callback):
-        # Try to open the file location for the user
-        if os.path.exists(output_pdf):
-            try: os.startfile(os.path.dirname(output_pdf))
-            except: pass
-            try: os.startfile(output_pdf)
-            except: pass
+        # SOLO ABRIR SI ESTÁ HABILITADO
+        if OPEN_RESULT_ON_FINISH:
+            if os.path.exists(output_pdf):
+                try: os.startfile(os.path.dirname(output_pdf))
+                except: pass
+                try: os.startfile(output_pdf)
+                except: pass
         log_callback("[HECHO] Finalizado.")
     else:
         log_callback("[ERROR] No se pudo crear el PDF.")
 
-    # Cleanup
     if temp_dir and os.path.exists(temp_dir):
-        try:
-            shutil.rmtree(temp_dir)
+        try: shutil.rmtree(temp_dir)
         except: pass
 
 async def download_and_make_pdf(image_urls: List[str], output_name: str, headers: dict, log_callback: Callable[[str], None], check_cancel: Callable[[], bool], progress_callback: Optional[Callable[[int, int], None]] = None, is_path: bool = False) -> None:
-    """
-    Orchestration function: Downloads images in chunks -> Creates PDF/Folder -> Cleans up.
-    """
     current_dir = os.path.dirname(os.path.abspath(__file__))
     temp_folder = os.path.join(current_dir, TEMP_FOLDER_NAME)
     
-    # Clean/Create temp folder
     if os.path.exists(temp_folder): shutil.rmtree(temp_folder)
     os.makedirs(temp_folder, exist_ok=True)
     
     files = []
     
-    # Download images using a single session
     async with aiohttp.ClientSession(headers=headers) as session:
         chunk_size = BATCH_SIZE 
         results = []
         for i in range(0, len(image_urls), chunk_size):
-            if check_cancel():
+            if check_cancel and check_cancel():
                 log_callback("[AVISO] Proceso cancelado por el usuario.")
                 break
             chunk = image_urls[i:i+chunk_size]
@@ -165,7 +160,6 @@ async def download_and_make_pdf(image_urls: List[str], output_name: str, headers
             res = await asyncio.gather(*tasks)
             results.extend(res)
             
-            # Update Progress
             if progress_callback:
                 progress_callback(min(i + chunk_size, len(image_urls)), len(image_urls))
             
@@ -175,206 +169,130 @@ async def download_and_make_pdf(image_urls: List[str], output_name: str, headers
     
     if files:
         if is_path:
-            # Special case for M440 chapters where output_name is full path
-            # We can't easily use the helper here without partial rewrite, or we just call create_pdf directly
             if create_pdf(files, output_name, log_callback):
-                pass # Don't open every chapter if batch downloading
+                pass
         else:
-            # Use the cleaner helper
             finalize_pdf_flow(files, output_name, log_callback, temp_folder)
-            return # Helper handles cleanup
+            return
 
-    # Cleanup (if not handled by helper)
     if os.path.exists(temp_folder): shutil.rmtree(temp_folder)
-    log_callback("[HECHO] Finalizado.")
+    
+    if not is_path:
+        log_callback("[HECHO] Finalizado.")
+    else:
+        # In bulk mode, individual completion is implicit or logged by caller
+        pass
 
 # ==============================================================================
-# SITE LOGIC: HITOMI.LA (Stealth Mode)
+# SITE LOGIC
 # ==============================================================================
 
 async def process_hitomi(input_url: str, log_callback: Callable[[str], None], check_cancel: Callable[[], bool], progress_callback: Optional[Callable[[int, int], None]] = None) -> None:
-    """
-    Descarga imágenes de Hitomi usando Playwright para simular un usuario real
-    y obtener imágenes de alta calidad (page-by-page).
-    """
     id_match = re.search(r'[-/](\d+)\.html', input_url)
     if not id_match:
         log_callback("[ERROR] No se pudo extraer ID de la URL.")
         return
-    gallery_id = int(id_match.group(1)) # Integer for logic
+    gallery_id = int(id_match.group(1))
     
     log_callback(f"[INIT] Procesando Hitomi ID: {gallery_id} (Modo Navegador)...")
     
-    # Create temp directory
     current_dir = os.path.dirname(os.path.abspath(__file__))
     temp_dir = os.path.join(current_dir, TEMP_FOLDER_NAME)
-    if os.path.exists(temp_dir):
-        shutil.rmtree(temp_dir)
+    if os.path.exists(temp_dir): shutil.rmtree(temp_dir)
     os.makedirs(temp_dir)
     
     download_targets = []
     
-    
     async with async_playwright() as p:
-        # Launch visible browser to behave exactly like a user
+        # HEADLESS TRUE SI ES BOT PODRÍA SER MEJOR, PERO HITOMI REQUIERE VISUAL A VECES.
+        # Open in headless=False usually works best for stealth, doing True if needed can be configured.
         browser = await p.chromium.launch(headless=False, args=["--start-maximized"])
-        context = await browser.new_context(
-            user_agent=USER_AGENT,
-            viewport={'width': 1280, 'height': 720}
-        )
+        context = await browser.new_context(user_agent=USER_AGENT, viewport={'width': 1280, 'height': 720})
         page = await context.new_page()
         
         try:
-            # 1. Inspect Metadata via API first (just to get count/title is faster)
-            # We can still use the API for the "plan", but rely on browser for "execution"
-            gallery_js_url = f"https://ltn.hitomi.la/galleries/{gallery_id}.js"
-            title = f"Hitomi_{gallery_id}"
-            
-            # Navigate to Reader
             reader_url = f"https://hitomi.la/reader/{gallery_id}.html#1"
             log_callback(f"[INFO] Abriendo lector: {reader_url}")
             await page.goto(reader_url, wait_until="domcontentloaded")
-            
-            # Wait for title to load if possible (hitomi sets document title)
             await page.wait_for_timeout(2000)
+            
+            title = f"Hitomi_{gallery_id}"
             page_title = await page.title()
             if page_title:
                 clean_title = re.sub(r'[\\/*?:"<>|]', '', page_title).strip()
                 title = clean_title if clean_title else title
             log_callback(f"[INFO] Título detectado: {title}")
 
-            # Get total images from galleryinfo
-            # Hitomi usually defines 'galleryinfo' global variable
             total_images = await page.evaluate("() => window.galleryinfo ? window.galleryinfo.files.length : 0")
-            
             if total_images == 0:
-                log_callback("[INFO] 'galleryinfo' no detectado, intentando contar via API local...")
-                # Fallback: fetch JS manually if browser didn't expose it globally yet
-                # But usually reader loads it. Let's assume we can proceed page by page until failure.
-                # Or wait for it.
                 try:
                     await page.wait_for_function("() => window.galleryinfo && window.galleryinfo.files.length > 0", timeout=5000)
                     total_images = await page.evaluate("() => window.galleryinfo.files.length")
                 except:
-                    log_callback("[WARN] No se pudo determinar total de imágenes. Se intentará descubrir al vuelo.")
-                    total_images = 9999 # Arbitrary limit
+                    total_images = 9999
 
             log_callback(f"[INFO] Imágenes estimadas: {total_images}")
 
-            # Loop through pages
-            # Hitomi reader URL hash #1, #2, ... matches index+1
-            
             for i in range(1, total_images + 1):
-                if check_cancel():
-                    log_callback("[AVISO] Proceso cancelado por el usuario.")
-                    break
+                if check_cancel and check_cancel(): break
 
                 try:
-                    # Update hash to go to next image
-                    # Hitomi checks hashchange event
-                    current_url = f"https://hitomi.la/reader/{gallery_id}.html#{i}"
-                    
-                    # If we are already there (first page), just checking.
-                    # Navigate via JS is faster/cleaner than page.goto for SPAs
                     await page.evaluate(f"location.hash = '#{i}'")
-                    
-                    # Wait for image to update. 
-                    # Hitomi puts the main image in 'div.img-url img' or just 'img'
-                    # We look for the image that matches the expected resolution or simply the VISIBLE one.
-                    # A robust selector is often 'img' inside the main container.
                     selector = "div#comicImages img" 
+                    await page.wait_for_function("""(selector) => { const img = document.querySelector(selector); return img && img.src && img.src.indexOf('http') === 0; }""", arg=selector, timeout=10000)
                     
-                    # Wait for the image to have a valid src (not empty)
-                    await page.wait_for_function(
-                        """(selector) => {
-                            const img = document.querySelector(selector);
-                            return img && img.src && img.src.indexOf('http') === 0;
-                        }""", 
-                        arg=selector, 
-                        timeout=10000
-                    )
-                    
-                    # Extract info
-                    img_info = await page.evaluate("""(selector) => {
-                        const img = document.querySelector(selector);
-                        return {src: img.src, width: img.naturalWidth, height: img.naturalHeight};
-                    }""", selector)
-                    
+                    img_info = await page.evaluate("""(selector) => { const img = document.querySelector(selector); return {src: img.src, width: img.naturalWidth, height: img.naturalHeight}; }""", selector)
                     img_src = img_info['src']
                     
-                    # Log what we found
                     log_callback(f"[DEBUG] Pág {i}: {img_src.split('/')[-1]} ({img_info['width']}x{img_info['height']})")
                     
-                    # Download using Page Context with Explicit Referer
-                    # Hitomi returns 404 if Referer is missing, even inside Playwright APIContext if not set
                     headers = {"Referer": f"https://hitomi.la/reader/{gallery_id}.html"}
                     response = await page.request.get(img_src, headers=headers)
                     
                     if response.status == 200:
                         data = await response.body()
-                        ext = img_src.split('.')[-1]
-                        if '?' in ext: ext = ext.split('?')[0]
+                        ext = img_src.split('.')[-1].split('?')[0]
                         filename = f"{i:03d}.{ext}"
                         filepath = os.path.join(temp_dir, filename)
-                        
-                        with open(filepath, 'wb') as f:
-                            f.write(data)
-                        
+                        with open(filepath, 'wb') as f: f.write(data)
                         download_targets.append(filepath)
                         log_callback(f"[OK] Descargada {i}/{total_images}")
-                        if progress_callback:
-                            progress_callback(i, total_images)
+                        if progress_callback: progress_callback(i, total_images)
                     else:
                         log_callback(f"[ERROR] Pág {i} falló con status {response.status}")
                     
-                    # Small delay to be nice
                     await page.wait_for_timeout(500)
                     
                 except Exception as e:
                     log_callback(f"[ERROR] Error en pág {i}: {e}")
-                    # If failed heavily, break? Or continue?
-                    # If total_images was guessed, maybe we reached end?
-                    if total_images == 9999 and i > 5: # If we processed some but failed now
-                        log_callback("[INFO] Posible fin de galería detectado.")
-                        break
-
+                    if total_images == 9999 and i > 5: break
+            
             log_callback(f"\n[INFO] Descarga finalizada. {len(download_targets)} imágenes obtenidas.")
             
         except Exception as e:
             log_callback(f"[ERROR] Error global Playwright: {e}")
-            import traceback
-            traceback.print_exc()
         finally:
             await browser.close()
 
-    # Generate PDF via Shared Helper
     if download_targets:
         pdf_name = f"{re.sub(r'[\\/*?:"<>|]', '', title).strip()}.pdf"
         finalize_pdf_flow(download_targets, pdf_name, log_callback, temp_dir)
     else:
         log_callback("[ERROR] No se descargaron imágenes para crear el PDF.")
 
-# ==============================================================================
-# SITE LOGIC: TMOHentai / M440 / Hentai2Read
-# ==============================================================================
-
 async def process_tmo(input_url: str, log_callback: Callable[[str], None], check_cancel: Callable[[], bool], progress_callback: Optional[Callable[[int, int], None]] = None) -> None:
-    """TMOHentai Logic (Uses Gemini AI for Extraction)."""
     log_callback("[INIT] Procesando TMO...")
     
-    # Adjust URL for cascading view
     target_url = input_url
     if "/contents/" in input_url:
         target_url = input_url.replace("/contents/", "/reader/") + "/cascade"
     elif "/paginated/" in input_url:
         target_url = re.sub(r'/paginated/\d+', '/cascade', input_url)
     
-    # Configure AI Extraction
     llm_config = LLMConfig(provider="gemini/gemini-1.5-flash", api_token=os.environ["GOOGLE_API_KEY"])
     instruction = "Estás en un lector de manga. Extrae TODAS las URLs de las imágenes. Busca 'data-original' y 'src'. Prioriza 'data-original'. Retorna JSON {'images': ['url1'...]}."
     llm_strategy = LLMExtractionStrategy(llm_config=llm_config, instruction=instruction)
 
-    # JS to lazy-load images
     js_lazy_load = """
     (async () => {
         const sleep = (ms) => new Promise(r => setTimeout(r, ms));
@@ -391,7 +309,6 @@ async def process_tmo(input_url: str, log_callback: Callable[[str], None], check
         
         if result.success:
             image_urls = []
-            # Parse AI Result
             try:
                 if result.extracted_content:
                     clean = result.extracted_content
@@ -401,7 +318,6 @@ async def process_tmo(input_url: str, log_callback: Callable[[str], None], check
             except Exception as e:
                 log_callback(f"[AVISO] Error parseando IA: {e}")
             
-            # Fallback Regex
             if not image_urls and result.html:
                 matches = re.findall(r'data-original=["\'](https://[^"\']+\.(?:webp|jpg|png))["\']', result.html)
                 if matches: image_urls = sorted(list(set(matches)))
@@ -424,7 +340,6 @@ async def process_tmo(input_url: str, log_callback: Callable[[str], None], check
             log_callback(f"[ERROR] Crawler falló: {result.error_message}")
 
 async def process_m440(input_url: str, log_callback: Callable[[str], None], check_cancel: Callable[[], bool], progress_callback: Optional[Callable[[int, int], None]] = None) -> None:
-    """M440.in Logic."""
     log_callback("[INIT] Procesando M440...")
 
     async with AsyncWebCrawler(verbose=True) as crawler:
@@ -434,27 +349,18 @@ async def process_m440(input_url: str, log_callback: Callable[[str], None], chec
             return
 
         html = result.html
-        html = result.html
-        
-        # Detect functionality based on URL structure
-        # /manga/slug -> Cover Page
-        # /manga/slug/chapter -> Single Chapter
         clean_url = input_url.split("?")[0].rstrip("/")
         is_cover_page = bool(re.search(r'/manga/[^/]+$', clean_url))
         
-        # Backup check: Look for multiple chapter links if URL is ambiguous
         if not is_cover_page:
              potential_chapters = re.findall(r'href=["\'](https://m440.in/manga/[^/]+/[^"\']+)["\']', html)
-             # If we find many chapter-like links (more than 3 to avoid next/prev buttons), assume cover
-             if len(set(potential_chapters)) > 3:
-                 is_cover_page = True
+             if len(set(potential_chapters)) > 3: is_cover_page = True
 
         if is_cover_page:
             log_callback("[INFO] Portada detectada. Extrayendo capítulos...")
             manga_title = "Manga_M440"
             title_match = re.search(r'<h2[^>]*class=["\']widget-title["\'][^>]*>(.*?)</h2>', html)
-            if title_match:
-                manga_title = re.sub(r'[\\/*?:"<>|]', "", title_match.group(1).strip())
+            if title_match: manga_title = re.sub(r'[\\/*?:"<>|]', "", title_match.group(1).strip())
             
             links = re.findall(r'href=["\'](https://m440.in/manga/[^/]+/[^"\']+)["\']', html)
             seen = set()
@@ -474,33 +380,26 @@ async def process_m440(input_url: str, log_callback: Callable[[str], None], chec
             os.makedirs(manga_dir, exist_ok=True)
 
             for i, chap_url in enumerate(clean_links):
-                if check_cancel():
-                    log_callback("[AVISO] Proceso cancelado por el usuario.")
-                    break
-                
+                if check_cancel and check_cancel(): break
                 if progress_callback: progress_callback(i + 1, len(clean_links))
                 log_callback(f"Procesando Cap {i+1}/{len(clean_links)}")
                 pdf_name = f"{manga_title} - {chap_url.split('/')[-1]}.pdf"
                 full_pdf_path = os.path.join(manga_dir, pdf_name)
                 if os.path.exists(full_pdf_path): continue
-                # Pass None for progress because we track chapters here, not internal images
                 await process_m440_chapter(chap_url, full_pdf_path, crawler, log_callback, check_cancel, None)
             
-            os.startfile(manga_dir)
+            if OPEN_RESULT_ON_FINISH:
+                try: os.startfile(manga_dir)
+                except: pass
         else:
-            # Single Chapter
             log_callback("[INFO] Capítulo individual detectado.")
             pdf_name = "m440_chapter.pdf"
             current_dir = os.path.dirname(os.path.abspath(__file__))
             pdf_dir = os.path.join(current_dir, PDF_FOLDER_NAME)
             os.makedirs(pdf_dir, exist_ok=True)
-            
             full_pdf_path = os.path.join(pdf_dir, pdf_name)
             await process_m440_chapter(input_url, full_pdf_path, crawler, log_callback, check_cancel, progress_callback)
-            if os.path.exists(full_pdf_path): 
-                try: os.startfile(os.path.dirname(full_pdf_path))
-                except: pass
-                
+            if OPEN_RESULT_ON_FINISH and os.path.exists(full_pdf_path): 
                 try: os.startfile(full_pdf_path)
                 except: pass
 
@@ -515,9 +414,7 @@ async def process_m440_chapter(url: str, output_pdf_path: str, crawler: AsyncWeb
         await download_and_make_pdf(images, output_pdf_path, HEADERS_M440, log_callback, check_cancel, progress_callback, is_path=True)
 
 async def process_h2r(input_url: str, log_callback: Callable[[str], None], check_cancel: Callable[[], bool], progress_callback: Optional[Callable[[int, int], None]] = None) -> None:
-    """Hentai2Read Logic."""
     log_callback("[INIT] Procesando Hentai2Read...")
-    
     async with AsyncWebCrawler(verbose=True) as crawler:
         result = await crawler.arun(url=input_url, bypass_cache=True)
         if not result.success:
@@ -525,8 +422,6 @@ async def process_h2r(input_url: str, log_callback: Callable[[str], None], check
             return
             
         html = result.html
-        
-        # Extract gData JSON variable
         gdata_match = re.search(r'var gData\s*=\s*(\{.*?\});', html, re.DOTALL)
         
         if gdata_match:
@@ -560,7 +455,6 @@ async def process_h2r(input_url: str, log_callback: Callable[[str], None], check
             log_callback("[ERROR] No se encontraron datos del capítulo.")
 
 async def process_nhentai(input_url: str, log_callback: Callable[[str], None], check_cancel: Callable[[], bool], progress_callback: Optional[Callable[[int, int], None]] = None) -> None:
-    """nhentai.net Logic using Playwright API Access."""
     id_match = re.search(r'nhentai\.net/g/(\d+)', input_url)
     if not id_match:
         log_callback("[ERROR] No se pudo extraer ID de la URL.")
@@ -580,15 +474,12 @@ async def process_nhentai(input_url: str, log_callback: Callable[[str], None], c
     title = f"nhentai_{gallery_id}"
     media_id = ""
 
-    # Fetch Metadata via Playwright (bypassing generic restrictions)
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=False) # Visible to pass checks
+        browser = await p.chromium.launch(headless=False)
         page = await browser.new_page()
         try:
             log_callback("[INFO] Obteniendo metadatos...")
             await page.goto(api_url, wait_until="domcontentloaded")
-            
-            # Browser might wrap JSON in PRE tag
             content = await page.inner_text("body")
             
             try:
@@ -598,21 +489,17 @@ async def process_nhentai(input_url: str, log_callback: Callable[[str], None], c
                 
                 media_id = data.get("media_id")
                 images_list = data.get("images", {}).get("pages", [])
-                
-                # Extension map
                 ext_map = {'j': 'jpg', 'p': 'png', 'w': 'webp'}
                 
                 for idx, img in enumerate(images_list):
                     t = img.get('t')
                     ext = ext_map.get(t, 'jpg')
-                    # Format: https://i.nhentai.net/galleries/{media_id}/{page_num}.{ext}
                     img_url = f"https://i.nhentai.net/galleries/{media_id}/{idx+1}.{ext}"
                     images_data.append(img_url)
                     
             except json.JSONDecodeError:
                 log_callback("[ERROR] Fallo al parsear respuesta API.")
                 return
-                
         except Exception as e:
             log_callback(f"[ERROR] Error obteniendo metadatos: {e}")
             return
@@ -621,22 +508,188 @@ async def process_nhentai(input_url: str, log_callback: Callable[[str], None], c
             
     if images_data:
         log_callback(f"[INFO] Galería: {title} ({len(images_data)} imgs)")
-        
-        # Download images logic
-        # nhentai usually doesn't need Referer for 'i.nhentai.net', but good to have
         headers = {"User-Agent": USER_AGENT} 
-        
-        # Re-use shared finalizer? 
-        # But we need to download first. 
-        # We can reuse download_and_make_pdf logic but simpler since we have URLs.
-        
         pdf_name = f"{re.sub(r'[\\/*?:"<>|]', '', title).strip()}.pdf"
         await download_and_make_pdf(images_data, pdf_name, headers, log_callback, check_cancel, progress_callback)
     else:
         log_callback("[ERROR] No se encontraron imágenes.")
 
+
+
+async def process_zonatmo(input_url: str, log_callback: Callable[[str], None], check_cancel: Callable[[], bool], progress_callback: Optional[Callable[[int, int], None]] = None) -> None:
+    """Proceso principal para ZonaTMO (Portadas y Capítulos)."""
+    log_callback("[INIT] Procesando ZonaTMO...")
+    
+    # 1. Modo Portada (Lista de capítulos)
+    if "/library/manga/" in input_url:
+        log_callback("[INFO] Portada detectada. Buscando capítulos...")
+        async with AsyncWebCrawler(verbose=True) as crawler:
+            result = await crawler.arun(url=input_url, bypass_cache=True)
+            if not result.success:
+                log_callback(f"[ERROR] Fallo al cargar portada: {result.error_message}")
+                return
+            
+            # Extraer links de capítulos
+            links = re.findall(r'href=["\'](https://zonatmo.com/view_uploads/[^"\']+)["\']', result.html)
+            
+            # Limpiar duplicados manteniendo orden
+            clean_links = []
+            seen = set()
+            for l in links:
+                if l not in seen:
+                    clean_links.append(l)
+                    seen.add(l)
+            
+            if not clean_links:
+                log_callback("[ERROR] No se encontraron capítulos.")
+                return
+
+            log_callback(f"[INFO] Se encontraron {len(clean_links)} capítulos.")
+            
+            manga_title = "Manga_ZonaTMO"
+            
+            # Intento 1: H1 Específico de ZonaTMO
+            # <h1 class="element-title my-2"> Título <small>(Año)</small> </h1>
+            h1_match = re.search(r'<h1[^>]*class=["\'].*?element-title.*?["\'][^>]*>(.*?)</h1>', result.html, re.IGNORECASE | re.DOTALL)
+            
+            if h1_match: 
+                raw_html = h1_match.group(1)
+                # Quitar tag year
+                raw_html = re.sub(r'<small[^>]*>.*?</small>', '', raw_html, flags=re.IGNORECASE | re.DOTALL)
+                raw_html = re.sub(r'\s+', ' ', raw_html) # espacios extra
+                candidate = clean_filename(raw_html) 
+                if candidate and candidate != "untitled":
+                     manga_title = candidate
+            
+            # Intento 2: Title Tag
+            if manga_title == "Manga_ZonaTMO":
+                title_tag = re.search(r'<title>(.*?)</title>', result.html, re.IGNORECASE)
+                if title_tag:
+                    raw = title_tag.group(1).split('|')[0].split('-')[0].strip()
+                    manga_title = clean_filename(raw)
+
+            if not manga_title or len(manga_title) < 2: manga_title = "Manga_ZonaTMO"
+            
+            log_callback(f"[INFO] Título detectado: {manga_title}")
+            
+            current_dir = os.path.dirname(os.path.abspath(__file__))
+            manga_dir = os.path.join(current_dir, PDF_FOLDER_NAME, manga_title)
+            os.makedirs(manga_dir, exist_ok=True)
+            
+            # Descargar en orden inverso (Cap 1 primero) si la web los lista new->old
+            clean_links.reverse()
+
+            for i, chap_url in enumerate(clean_links):
+                if check_cancel and check_cancel(): break
+                if progress_callback: progress_callback(i + 1, len(clean_links))
+                
+                # Naming: MangaName - 001.pdf
+                pdf_name = f"{manga_title} - {i+1:03d}.pdf"
+                full_pdf_path = os.path.join(manga_dir, pdf_name)
+                
+                if os.path.exists(full_pdf_path): 
+                    continue
+                
+                log_callback(f"Procesando Cap {i+1}/{len(clean_links)}")
+                
+                try:
+                    await process_zonatmo_chapter(chap_url, full_pdf_path, log_callback, check_cancel, None)
+                    await asyncio.sleep(1) # Rate limit friendly
+                except Exception as e:
+                    log_callback(f"[ERROR] Falló capítulo {i+1}: {e}")
+            
+            if OPEN_RESULT_ON_FINISH:
+                try: os.startfile(manga_dir)
+                except: pass
+
+    # 2. Modo Capítulo Único
+    else:
+        pdf_name = "zonatmo_chapter.pdf"
+        await process_zonatmo_chapter(input_url, pdf_name, log_callback, check_cancel, progress_callback)
+
+async def process_zonatmo_chapter(url: str, output_name: str, log_callback: Callable[[str], None], check_cancel: Callable[[], bool], progress_callback: Optional[Callable[[int, int], None]] = None) -> None:
+    """Procesa un capítulo individual de ZonaTMO: Redirección -> Cascade -> Imágenes."""
+    target_url = url
+    
+    # Resolver redirecciones (view_uploads -> viewer/.../paginated)
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, headers=HEADERS_ZONATMO) as resp:
+                if resp.status == 200:
+                    final_url = str(resp.url)
+                    if "/paginated" in final_url:
+                        target_url = final_url.replace("/paginated", "/cascade")
+                    elif "/viewer/" in final_url:
+                         if not final_url.endswith("/cascade"):
+                             target_url = final_url + "/cascade"
+                else:
+                    log_callback(f"[AVISO] Fallo al resolver URL: {resp.status}, usando original.")
+    except Exception as e:
+         log_callback(f"[DEBUG] Error resolviendo redirección: {e}")
+
+    log_callback(f"[INFO] URL Cascada: {target_url}")
+
+    # Configuración LLM (para casos difíciles)
+    # Nota: Realmente ZonaTMO parece funcionar mejor con Regex puro en muchos casos,
+    # pero mantenemos el Crawler+LLM como fallback robusto si se desea.
+    # Por ahora, usaremos las regex directas sobre el result.html que devuelve Crawler
+    # ya que es más rápido/barato si funciona.
+    
+    llm_config = LLMConfig(provider="gemini/gemini-1.5-flash", api_token=os.environ["GOOGLE_API_KEY"])
+    instruction = "Estás en un lector de manga. Extrae TODAS las URLs de las imágenes. Busca 'data-original' y 'src'. Retorna JSON {'images': ['url1'...]}."
+    llm_strategy = LLMExtractionStrategy(llm_config=llm_config, instruction=instruction)
+    
+    js_lazy_load = """
+    (async () => {
+        const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+        window.scrollTo(0, 0);
+        let totalHeight = 0; let distance = 1000;
+        while(totalHeight < document.body.scrollHeight) { window.scrollBy(0, distance); totalHeight += distance; await sleep(200); }
+        await sleep(1000);
+    })();
+    """
+
+    async with AsyncWebCrawler(verbose=True) as crawler:
+        # Intentamos primero sin LLM extraction expensive si podemos confiar en regex
+        # Pero el código original usaba LLM. Lo mantendremos pero optimizado.
+        result = await crawler.arun(target_url, extraction_strategy=llm_strategy, bypass_cache=True, js_code=js_lazy_load) 
+        
+        image_urls = []
+        if result.success:
+            # 1. Intentar extracción IA
+            try:
+                if result.extracted_content:
+                    clean = result.extracted_content
+                    if "```json" in clean: clean = clean.split("```json")[1].split("```")[0].strip()
+                    elif "```" in clean: clean = clean.split("```")[1].split("```")[0].strip()
+                    image_urls = json.loads(clean).get("images", [])
+            except: pass
+            
+            # 2. Intentar Regex (Suele ser más efectivo en ZonaTMO)
+            if not image_urls and result.html:
+                matches = re.findall(r'(https?://(?:img1?\.?tmo\.com|otakuteca\.com|img1tmo\.com)[^"\'\s]+\.(?:webp|jpg|png))', result.html)
+                if matches: image_urls = sorted(list(set(matches)))
+        
+        # Filtrar basura (covers, banners)
+        image_urls = [u for u in image_urls if "cover" not in u and "avatar" not in u and "banner" not in u]
+
+        if image_urls:
+            log_callback(f"[INFO] Imágenes encontradas: {len(image_urls)}")
+            
+            final_pdf = output_name
+            # Si es descarga individual y no tenemos nombre, intentar adivinar
+            if output_name == "zonatmo_chapter.pdf" and result.html:
+                 match = re.search(r'<h1[^>]*>(.*?)</h1>', result.html)
+                 if match:
+                     final_pdf = f"{clean_filename(match.group(1))}.pdf"
+
+            is_path = "/" in final_pdf or "\\" in final_pdf
+            await download_and_make_pdf(image_urls, final_pdf, HEADERS_ZONATMO, log_callback, check_cancel, progress_callback, is_path=is_path)
+        else:
+            log_callback("[ERROR] No se encontraron imágenes.")
+
 async def process_entry(url: str, log_callback: Callable[[str], None], check_cancel: Callable[[], bool], progress_callback: Optional[Callable[[int, int], None]] = None):
-    """Main Router: Redirects to specific site handler based on URL."""
+    """Router principal: Redirige a la función específica según el dominio."""
     if "tmohentai" in url:
         await process_tmo(url, log_callback, check_cancel, progress_callback=progress_callback)
     elif "m440.in" in url or "mangas.in" in url:
@@ -647,149 +700,7 @@ async def process_entry(url: str, log_callback: Callable[[str], None], check_can
         await process_hitomi(url, log_callback, check_cancel, progress_callback=progress_callback)
     elif "nhentai.net" in url:
         await process_nhentai(url, log_callback, check_cancel, progress_callback=progress_callback)
+    elif "zonatmo.com" in url:
+        await process_zonatmo(url, log_callback, check_cancel, progress_callback=progress_callback)
     else:
         log_callback("[ERROR] Sitio web no soportado.")
-
-# ==============================================================================
-# GUI APPLICATION
-# ==============================================================================
-
-class DownloaderApp:
-    def __init__(self, root: tk.Tk):
-        self.root = root
-        self.cancelled = False
-        self.root.title("Universal Manga Downloader")
-        self.root.geometry("800x600")
-        
-        # Styles
-        style = ttk.Style()
-        style.configure("TButton", font=("Segoe UI", 10))
-        style.configure("TLabel", font=("Segoe UI", 11))
-        
-        # Main Layout
-        main_frame = ttk.Frame(root, padding="20")
-        main_frame.pack(fill=tk.BOTH, expand=True)
-        
-        # Header
-        ttk.Label(main_frame, text="Manga PDF Downloader", font=("Segoe UI", 16, "bold")).pack(pady=(0, 20))
-        
-        # Input Area
-        input_frame = ttk.LabelFrame(main_frame, text="Input", padding="10")
-        input_frame.pack(fill=tk.X, pady=(0, 15))
-        
-        ttk.Label(input_frame, text="URL (TMO, M440, H2R, Hitomi, nhentai):").pack(anchor=tk.W)
-        self.url_entry = ttk.Entry(input_frame)
-        self.url_entry.pack(fill=tk.X, pady=(5, 10))
-        
-        self.placeholder_text = "Pega tu URL aquí..."
-        self.url_entry.insert(0, self.placeholder_text)
-        self.url_entry.config(foreground='grey')
-
-        self.url_entry.bind("<FocusIn>", self._on_entry_focus_in)
-        self.url_entry.bind("<FocusOut>", self._on_entry_focus_out)
-        
-        self.btn_start = ttk.Button(input_frame, text="Descargar PDF", command=self.start_process)
-        self.btn_start.pack(fill=tk.X, pady=(0, 5))
-        
-        self.btn_cancel = ttk.Button(input_frame, text="Cancelar Detener", command=self.cancel_process, state='disabled')
-        self.btn_cancel.pack(fill=tk.X, pady=(0, 5))
-
-        # Progress Bar
-        self.progress = ttk.Progressbar(input_frame, orient="horizontal", length=100, mode="determinate")
-        self.progress.pack(fill=tk.X, pady=(0, 10))
-        
-        # Logging Area
-        log_frame = ttk.LabelFrame(main_frame, text="Logs", padding="10")
-        log_frame.pack(fill=tk.BOTH, expand=True)
-        
-        self.log_area = scrolledtext.ScrolledText(log_frame, state='disabled', font=("Consolas", 9))
-        self.log_area.pack(fill=tk.BOTH, expand=True)
-
-    def _on_entry_focus_in(self, event) -> None:
-        if self.url_entry.get() == self.placeholder_text:
-            self.url_entry.delete(0, tk.END)
-            self.url_entry.config(foreground='black')
-
-    def _on_entry_focus_out(self, event) -> None:
-        if not self.url_entry.get():
-            self.url_entry.insert(0, self.placeholder_text)
-            self.url_entry.config(foreground='grey')
-
-    def log(self, message: str) -> None:
-        """Appends message to GUI log and File log."""
-        self.log_area.config(state='normal')
-        self.log_area.insert(tk.END, message + "\n")
-        self.log_area.see(tk.END)
-        self.log_area.config(state='disabled')
-        
-        # File Logging
-        try:
-            with open("downloader_debug.log", "a", encoding="utf-8") as f:
-                f.write(message + "\n")
-        except: pass
-
-    def start_process(self) -> None:
-        self.cancelled = False
-        url = self.url_entry.get().strip()
-        if not url or url == self.placeholder_text:
-            messagebox.showwarning("Aviso", "Por favor ingrese una URL.")
-            return
-
-        supported_domains = ["tmohentai", "m440.in", "mangas.in", "hentai2read", "hitomi.la", "nhentai.net"]
-        if not any(domain in url for domain in supported_domains):
-             messagebox.showwarning("Aviso", "URL no soportada.\nDominios válidos: tmohentai, m440.in, hentai2read, hitomi.la, nhentai.net")
-             return
-        
-        # Init Log
-        try:
-            with open("downloader_debug.log", "w", encoding="utf-8") as f:
-                f.write("=== LOG START ===\n")
-        except Exception as e:
-            print(f"Error escribiendo log: {e}")
-        
-        self.progress['value'] = 0
-        self.btn_start.config(state='disabled')
-        self.btn_cancel.config(state='normal')
-        self.log_area.config(state='normal')
-        self.log_area.delete(1.0, tk.END)
-        self.log_area.config(state='disabled')
-        
-        # Run in separate thread to prevent GUI freeze
-        threading.Thread(target=self.run_async, args=(url,), daemon=True).start()
-
-    def cancel_process(self) -> None:
-        """Establece la bandera de cancelación para detener las tareas asíncronas en curso."""
-        self.cancelled = True
-        self.log("[AVISO] Solicitando cancelación...")
-        self.btn_cancel.config(state='disabled')
-
-    def run_async(self, url: str) -> None:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        
-        # Thread-safe log adapter
-        def safe_log(msg): self.root.after(0, self.log, msg)
-        check_cancel = lambda: self.cancelled
-
-        # Thread-safe progress adapter
-        def safe_progress(current, total):
-            def _update():
-                self.progress['maximum'] = total
-                self.progress['value'] = current
-                # self.root.update_idletasks() # Optional, might cause flickering if too fast
-            self.root.after(0, _update)
-
-        try:
-            loop.run_until_complete(process_entry(url, safe_log, check_cancel, progress_callback=safe_progress))
-        finally:
-            loop.close()
-            self.root.after(0, lambda: self.reset_buttons())
-            
-    def reset_buttons(self):
-        self.btn_start.config(state='normal')
-        self.btn_cancel.config(state='disabled')
-
-if __name__ == "__main__":
-    root = tk.Tk()
-    app = DownloaderApp(root)
-    root.mainloop()

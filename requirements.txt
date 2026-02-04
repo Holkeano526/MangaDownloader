@@ -1,3 +1,5 @@
 aiohttp
 Pillow
 crawl4ai
+discord.py
+python-dotenv

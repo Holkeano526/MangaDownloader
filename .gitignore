@@ -1,35 +1,22 @@
+# Enviroment Variables
+.env
+.venv
+env/
+venv/
+
 # Python cache
 __pycache__/
 *.py[cod]
-*$py.class
-*.so
 
-# Virtual environments
-venv/
-env/
-ENV/
-
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
+# Downloaded Content (PDFs and images)
+PDF/
+temp_manga_images/
+*.pdf
 
 # Logs
 *.log
-downloader_debug.log
+investigation_result.txt
 
-# Output
-output/
-temp_manga_images/
-PDF/
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Environment variables
-.env
-
-# Debug files
-debug_*.html
+# IDE settings
+.vscode/
+.idea/

@@ -1,60 +1,68 @@
 # Universal Manga PDF Downloader 📥
 
-Una herramienta todo-en-uno para descargar manga y doujinshi de sitios populares y convertirlos automáticamente a PDF.
+Una herramienta todo-en-uno para descargar manga, doujinshi y cómics desde sitios populares de forma automatizada y convertirlos a PDF de alta calidad.
 
-## 🚀 Sitios Soportados
-| Sitio | Método de Descarga | Notas |
-|-------|--------------------|-------|
+## 🚀 Características
+*   **Multi-Plataforma:** Soporta TMO, ZonaTMO, M440, H2R, Hitomi y nhentai.
+*   **Modo Dual:**
+    *   🖥️ **App de Escritorio:** Interfaz gráfica simple y rápida.
+    *   🤖 **Bot de Discord:** Descarga remota con subida automática a Discord o GoFile.
+*   **PDF Automático:** Convierte todas las imágenes descargadas en un único archivo PDF.
+*   **Bypasses:** Salta protecciones Cloudflare y 403 mediante Playwright y headers inteligentes.
+
+## 🌐 Sitios Soportados
+| Sitio | Método | Notas |
+|-------|--------|-------|
+| **ZonaTMO** | Crawler + Cascade | ✅ Soporta series completas (baja todos los caps uno a uno) y capítulos sueltos. |
 | **TMOHentai** | IA + Regex | Prioriza calidad original. |
-| **M440.in** | Crawler Simple | Soporta portadas (baja todos los capítulos) y capítulos sueltos. |
+| **M440.in** | Crawler Simple | Soporta portadas y capítulos sueltos. |
 | **Hentai2Read** | Extracción JSON | Rápido y eficiente. |
-| **Hitomi.la** | **Playwright** (Navegador) | ✅ Bypassea protección 404.<br>✅ Descarga imágenes FULL RES.<br>✅ Usa ventanas visibles para evitar bloqueos. |
-| **nhentai.net** | **Playwright** (API) | ✅ Bypassea Cloudflare.<br>✅ Descarga calidad original. |
+| **Hitomi.la** | **Playwright** | ✅ Bypassea protección 404.<br>✅ Descarga imágenes FULL RES. |
+| **nhentai.net** | **Playwright** API | ✅ Bypassea Cloudflare.<br>✅ Descarga calidad original. |
 
-## 🛠️ Requisitos Previos
-Necesitas tener instalado **Python 3.8+** y las siguientes dependencias:
+## 🛠️ Instalación
 
-1.  **Instalar librerías de Python:**
-    ```powershell
-    pip install aiohttp pillow pandas playwright crawl4ai
+1.  **Clonar el repositorio:**
+    ```bash
+    git clone https://github.com/tu-usuario/manga-downloader.git
+    cd manga-downloader
     ```
-    *(Nota: `crawl4ai` es opcional si solo usas Hitomi/nhentai, pero necesario para TMO)*
 
-2.  **Instalar Navegadores de Playwright:**
-    Necesario para Hitomi y nhentai.
-    ```powershell
+2.  **Instalar dependencias:**
+    ```bash
+    pip install -r requirements.txt
     playwright install chromium
     ```
 
-3.  **Configuración de API (Solo para TMO):**
-    Si usas TMO, el script busca una API Key de Gemini en el código (`os.environ["GOOGLE_API_KEY"]`). Asegúrate de que sea válida.
+3.  **Configurar entorno:**
+    *   Crea un archivo `.env` basado en `.env.example`.
+    *   Agrega tu `GOOGLE_API_KEY` (para TMO/Crawler) y `DISCORD_TOKEN` (si usarás el bot).
 
 ## 📖 Cómo Usar
 
-1.  **Ejecutar el script:**
-    ```powershell
-    python tmo.py
-    ```
+### 🖥️ Opción A: App de Escritorio
+Ejecuta la interfaz gráfica para uso personal.
+```powershell
+python app.py
+```
+1.  Pega el enlace en el campo de texto.
+2.  Presiona "Descargar PDF".
+3.  El archivo se abrirá automáticamente al terminar.
 
-2.  **Interfaz Gráfica:**
-    Se abrirá una ventana sencilla.
-    *   **Input:** Pega la URL del manga/capítulo.
-        *   *Ejemplo Hitomi:* `https://hitomi.la/reader/12345.html` o `https://hitomi.la/doujinshi/...`
-        *   *Ejemplo nhentai:* `https://nhentai.net/g/622745/`
-    *   **Logs:** Verás el progreso detallado en la parte inferior (y en la consola negra que se abre detrás).
+### 🤖 Opción B: Bot de Discord
+Si tienes el token configurado, inicia el bot:
+```powershell
+python bot.py
+```
+*   **Comando:** `!descargar <url>`
+*   Si el archivo pesa <8MB, lo sube al chat.
+*   Si pesa más, lo sube automáticamente a **GoFile** y te da el link.
 
-3.  **Resultados:**
-    *   El script descargará las imágenes en una carpeta temporal.
-    *   Generará un **PDF** en la carpeta `PDF/`.
-    *   Al finalizar, abrirá automáticamente el PDF o la carpeta.
-
-## ⚠️ Solución de Problemas
-
-*   **Error "Playwright... not found":** Ejecuta `pip install playwright` y luego `playwright install chromium`.
-*   **Ventana del navegador se abre sola:** Es normal. Hitomi y nhentai requieren un navegador real para validar que eres humano. **No lo cierres** mientras descarga.
-*   **Error 404 en imágenes:** Asegúrate de tener la última versión del script, ya que incluye correcciones de `Referer` y tokens de seguridad (`gg.js`).
+## 📂 Estructura del Proyecto
+*   `core.py`: Lógica principal de descarga y procesamiento (Brain 🧠).
+*   `app.py`: Interfaz gráfica (Tkinter).
+*   `bot.py`: Cliente de Discord.
+*   `PDF/`: Carpeta donde se guardan los archivos finales.
 
 ---
-*Desarrollado con ayuda de Gemini*
-# MangaDownloader
-# MangaDownloader
+*Desarrollado con ayuda de Gemini* 🤖✨
