@@ -275,7 +275,7 @@ async def process_hitomi(input_url: str, log_callback: Callable[[str], None], ch
             await browser.close()
 
     if download_targets:
-        pdf_name = f"{re.sub(r'[\\/*?:"<>|]', '', title).strip()}.pdf"
+        pdf_name = f"{clean_filename(title)}.pdf"
         finalize_pdf_flow(download_targets, pdf_name, log_callback, temp_dir)
     else:
         log_callback("[ERROR] No se descargaron imágenes para crear el PDF.")
@@ -330,7 +330,7 @@ async def process_tmo(input_url: str, log_callback: Callable[[str], None], check
                 if result.html:
                     match = re.search(r'<h1[^>]*class=["\'].*?reader-title.*?["\'][^>]*>(.*?)</h1>', result.html, re.IGNORECASE | re.DOTALL)
                     if match:
-                        safe = re.sub(r'[\\/*?:"<>|]', "", match.group(1).strip()).replace("\n", " ")
+                        safe = clean_filename(match.group(1).strip()).replace("\n", " ")
                         if safe: pdf_name = f"{safe}.pdf"
                 
                 await download_and_make_pdf(image_urls, pdf_name, HEADERS_TMO, log_callback, check_cancel, progress_callback)
@@ -360,7 +360,7 @@ async def process_m440(input_url: str, log_callback: Callable[[str], None], chec
             log_callback("[INFO] Portada detectada. Extrayendo capítulos...")
             manga_title = "Manga_M440"
             title_match = re.search(r'<h2[^>]*class=["\']widget-title["\'][^>]*>(.*?)</h2>', html)
-            if title_match: manga_title = re.sub(r'[\\/*?:"<>|]', "", title_match.group(1).strip())
+            if title_match: manga_title = clean_filename(title_match.group(1).strip())
             
             links = re.findall(r'href=["\'](https://m440.in/manga/[^/]+/[^"\']+)["\']', html)
             seen = set()
@@ -443,7 +443,7 @@ async def process_h2r(input_url: str, log_callback: Callable[[str], None], check
                     pdf_name = "hentai2read_chapter.pdf"
                     title_match = re.search(r'[\'"]title[\'"]\s*:\s*[\'"](.*?)[\'"]', json_str)
                     if title_match:
-                        safe = re.sub(r'[\\/*?:"<>|]', "", title_match.group(1).strip())
+                        safe = clean_filename(title_match.group(1).strip())
                         pdf_name = f"{safe}.pdf"
                     
                     await download_and_make_pdf(image_urls, pdf_name, HEADERS_H2R, log_callback, check_cancel, progress_callback)
@@ -509,7 +509,7 @@ async def process_nhentai(input_url: str, log_callback: Callable[[str], None], c
     if images_data:
         log_callback(f"[INFO] Galería: {title} ({len(images_data)} imgs)")
         headers = {"User-Agent": USER_AGENT} 
-        pdf_name = f"{re.sub(r'[\\/*?:"<>|]', '', title).strip()}.pdf"
+        pdf_name = f"{clean_filename(title)}.pdf"
         await download_and_make_pdf(images_data, pdf_name, headers, log_callback, check_cancel, progress_callback)
     else:
         log_callback("[ERROR] No se encontraron imágenes.")
