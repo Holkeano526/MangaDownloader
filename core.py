@@ -206,9 +206,11 @@ async def process_hitomi(input_url: str, log_callback: Callable[[str], None], ch
     download_targets = []
     
     async with async_playwright() as p:
-        # HEADLESS TRUE SI ES BOT PODRÍA SER MEJOR, PERO HITOMI REQUIERE VISUAL A VECES.
-        # Open in headless=False usually works best for stealth, doing True if needed can be configured.
-        browser = await p.chromium.launch(headless=False, args=["--start-maximized"])
+        # Detectar entorno Headless (Docker)
+        is_headless = os.getenv("HEADLESS", "false").lower() == "true" or not os.getenv("DISPLAY")
+        if os.name == 'nt': is_headless = False # En Windows local siempre ventana visible para debug
+        
+        browser = await p.chromium.launch(headless=is_headless, args=["--no-sandbox", "--disable-setuid-sandbox"])
         context = await browser.new_context(user_agent=USER_AGENT, viewport={'width': 1280, 'height': 720})
         page = await context.new_page()
         
@@ -477,7 +479,10 @@ async def process_nhentai(input_url: str, log_callback: Callable[[str], None], c
     media_id = ""
 
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=False)
+        is_headless = os.getenv("HEADLESS", "false").lower() == "true" or not os.getenv("DISPLAY")
+        if os.name == 'nt': is_headless = False
+        
+        browser = await p.chromium.launch(headless=is_headless, args=["--no-sandbox"])
         page = await browser.new_page()
         try:
             log_callback("[INFO] Obteniendo metadatos...")
