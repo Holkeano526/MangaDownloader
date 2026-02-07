@@ -482,11 +482,26 @@ async def process_nhentai(input_url: str, log_callback: Callable[[str], None], c
         is_headless = os.getenv("HEADLESS", "false").lower() == "true" or not os.getenv("DISPLAY")
         if os.name == 'nt': is_headless = False
         
-        browser = await p.chromium.launch(headless=is_headless, args=["--no-sandbox"])
-        page = await browser.new_page()
+        # Argumentos extra para evitar detección básica de bot
+        args = [
+            "--no-sandbox", 
+            "--disable-setuid-sandbox",
+            "--disable-blink-features=AutomationControlled" 
+        ]
+        
+        browser = await p.chromium.launch(headless=is_headless, args=args)
+        
+        # Importante: Usar contexto con User-Agent real para evitar bloqueo inmediato
+        context = await browser.new_context(user_agent=USER_AGENT)
+        page = await context.new_page()
+        
         try:
             log_callback("[INFO] Obteniendo metadatos...")
             await page.goto(api_url, wait_until="domcontentloaded")
+            
+            # Pequeña espera por si hay redirección/challenge rápido
+            await page.wait_for_timeout(2000)
+            
             content = await page.inner_text("body")
             
             try:
@@ -505,7 +520,9 @@ async def process_nhentai(input_url: str, log_callback: Callable[[str], None], c
                     images_data.append(img_url)
                     
             except json.JSONDecodeError:
-                log_callback("[ERROR] Fallo al parsear respuesta API.")
+                # Loguear primeros 100 caracteres para ver si es Cloudflare o error 403
+                preview = content[:200] if content else "Contenido vacío"
+                log_callback(f"[ERROR] No es JSON. Respuesta recibida: {preview}")
                 return
         except Exception as e:
             log_callback(f"[ERROR] Error obteniendo metadatos: {e}")
