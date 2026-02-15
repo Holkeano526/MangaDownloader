@@ -92,10 +92,33 @@ def create_pdf(image_paths: List[str], output_pdf: str, log_callback: Callable[[
         return False
 
     try:
+        # Pre-procesamiento: img2pdf odia el canal Alpha (Transparencia).
+        # Convertimos una por una a RGB (JPG) si es necesario para no usar RAM excesiva.
+        final_paths = []
+        for path in image_paths:
+            try:
+                # Pillow open es "lazy", no carga la imagen completa en RAM solo para ver el modo
+                with Image.open(path) as img:
+                    # Si tiene transparencia (RGBA) o es Paleta (P) con transparencia
+                    if img.mode in ("RGBA", "LA") or (img.mode == "P" and "transparency" in img.info):
+                        # Generar ruta temporal .jpg
+                        head, tail = os.path.split(path)
+                        new_filename = os.path.splitext(tail)[0] + ".jpg"
+                        new_path = os.path.join(head, new_filename)
+                        
+                        # Convertir y guardar (Sobrescribe si es necesario o crea nuevo)
+                        img.convert("RGB").save(new_path, "JPEG", quality=90)
+                        final_paths.append(new_path)
+                    else:
+                        final_paths.append(path)
+            except Exception as e:
+                # Si falla al abrir, lo dejamos pasar y que img2pdf decida
+                final_paths.append(path)
+        
         # img2pdf es mucho más eficiente porque incrusta los bytes JPG directos sin re-codificar.
         # rotation=img2pdf.Rotation.ifvalid evita errores con EXIF corruptos
         with open(output_pdf, "wb") as f:
-            f.write(img2pdf.convert(image_paths, rotation=img2pdf.Rotation.ifvalid))
+            f.write(img2pdf.convert(final_paths, rotation=img2pdf.Rotation.ifvalid))
             
         log_callback(f"[EXITO] PDF Generado: {os.path.basename(output_pdf)}")
         return True
