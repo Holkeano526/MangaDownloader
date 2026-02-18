@@ -17,11 +17,17 @@ from dotenv import load_dotenv
 # ==============================================================================
 
 # Cargar variables de entorno
-load_dotenv()
+from pathlib import Path
+env_path = Path(__file__).parent / '.env'
+load_dotenv(dotenv_path=env_path)
 
 # API Key Check
-if not os.getenv("GOOGLE_API_KEY"):
-    print("[WARN] GOOGLE_API_KEY no encontrada en .env")
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+if not GOOGLE_API_KEY:
+    print("[WARN] GOOGLE_API_KEY no encontrada en .env. Algunas funciones (TMO/Crawler) pueden fallar.")
+    # Evitar KeyError más adelante asignando string vacío si es necesario, 
+    # aunque crawl4ai probablemente necesite una key válida.
+    os.environ["GOOGLE_API_KEY"] = "" 
 
 # Browser Identity
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
