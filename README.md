@@ -59,8 +59,15 @@ docker build -t manga-downloader .
 docker run -d --env-file .env --name manga-bot manga-downloader
 ```
 
+## Funcionamiento Interno
+El script sigue un proceso optimizado para mantener tu sistema limpio:
+1.  **Directorio Temporal**: Al iniciar una descarga, se crea automáticamente la carpeta `temp_manga_images/` donde se guardan las imágenes crudas (.jpg, .webp, etc.).
+2.  **Conversión**: Una vez descargadas todas las páginas, se procesan y compilan en un único archivo.
+3.  **Salida**: El archivo final se guarda en la carpeta `PDF/`.
+4.  **Limpieza**: Al finalizar (o si ocurre un error controlado), la carpeta `temp_manga_images/` se elimina automáticamente para no ocupar espacio innecesario.
+
 ## Estructura
 - `core.py`: Lógica de descarga y procesamiento.
 - `app.py`: GUI (Tkinter).
 - `bot.py`: Cliente de Discord.
-- `PDF/`: Directorio de salida.
+- `PDF/`: Directorio donde se guardan los mangas descargados.
