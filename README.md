@@ -1,68 +1,66 @@
-# Universal Manga PDF Downloader 📥
+# Manga Downloader
 
-Una herramienta todo-en-uno para descargar manga, doujinshi y cómics desde sitios populares de forma automatizada y convertirlos a PDF de alta calidad.
+Herramienta en Python para descargar mangas y doujinshis desde múltiples fuentes, convirtiéndolos automáticamente a PDF. Diseñada para gestionar protecciones anti-bot (Cloudflare, 403) y facilitar la lectura offline.
 
-## 🚀 Características
-*   **Multi-Plataforma:** Soporta TMO, ZonaTMO, M440, H2R, Hitomi y nhentai.
-*   **Modo Dual:**
-    *   🖥️ **App de Escritorio:** Interfaz gráfica simple y rápida.
-    *   🤖 **Bot de Discord:** Descarga remota con subida automática a Discord o GoFile.
-*   **PDF Automático:** Convierte todas las imágenes descargadas en un único archivo PDF.
-*   **Bypasses:** Salta protecciones Cloudflare y 403 mediante Playwright y headers inteligentes.
+## Características
 
-## 🌐 Sitios Soportados
+- **Soporte Multi-sitio**: Descarga desde TMO, ZonaTMO, M4\*\*, H2R, Hi\*\*\*\* y nh\*\*\*\*\*.
+- **Conversión Automática**: Genera un único archivo PDF por capítulo o galería.
+- **Modos de Ejecución**:
+  - **GUI Local**: Interfaz gráfica simple (Tkinter) para escritorio.
+  - **Bot de Discord**: Ejecución remota con subida automática a Discord o GoFile para archivos grandes.
+- **Evasión de Protecciones**: Uso de Playwright y headers personalizados para sitios protegidos.
+- **Docker Ready**: Listo para desplegar en contenedores.
+
+## Sitios Soportados
+
 | Sitio | Método | Notas |
 |-------|--------|-------|
-| **ZonaTMO** | Crawler + Cascade | ✅ Soporta series completas (baja todos los caps uno a uno) y capítulos sueltos. |
-| **TMOHentai** | IA + Regex | Prioriza calidad original. |
-| **M440.in** | Crawler Simple | Soporta portadas y capítulos sueltos. |
-| **Hentai2Read** | Extracción JSON | Rápido y eficiente. |
-| **Hitomi.la** | **Playwright** | ✅ Bypassea protección 404.<br>✅ Descarga imágenes FULL RES. |
-| **nhentai.net** | **Playwright** API | ✅ Bypassea Cloudflare.<br>✅ Descarga calidad original. |
+| **ZonaTMO / TMO** | Crawler | Series completas y capítulos individuales |
+| **M4\*\*.in** | Crawler | Portadas y capítulos |
+| **H2R** | JSON API | Extracción directa |
+| **Hi\*\*\*\*.la** | Playwright | Imágenes Full Resolution |
+| **nh\*\*\*\*\*.net** | Playwright | Bypass Cloudflare |
 
-## 🛠️ Instalación
+## Instalación
 
-1.  **Clonar el repositorio:**
+1.  **Clonar repositorio**
     ```bash
     git clone https://github.com/Holkeano526/MangaDownloader.git
     cd manga-downloader
     ```
 
-2.  **Instalar dependencias:**
+2.  **Instalar dependencias**
     ```bash
     pip install -r requirements.txt
     playwright install chromium
     ```
 
-3.  **Configurar entorno:**
-    *   Crea un archivo `.env` basado en `.env.example`.
-    *   Agrega tu `GOOGLE_API_KEY` (para TMO/Crawler) y `DISCORD_TOKEN` (si usarás el bot).
+3.  **Configuración**
+    Renombra `.env.example` a `.env` y configura tus credenciales (necesario para el Bot de Discord o TMO).
 
-## 📖 Cómo Usar
+## Uso
 
-### 🖥️ Opción A: App de Escritorio
-Ejecuta la interfaz gráfica para uso personal.
-```powershell
+### Interfaz de Escritorio
+```bash
 python app.py
 ```
-1.  Pega el enlace en el campo de texto.
-2.  Presiona "Descargar PDF".
-3.  El archivo se abrirá automáticamente al terminar.
 
-### 🤖 Opción B: Bot de Discord
-Si tienes el token configurado, inicia el bot:
-```powershell
+### Bot de Discord
+```bash
 python bot.py
 ```
-*   **Comando:** `!descargar <url>`
-*   Si el archivo pesa <8MB, lo sube al chat.
-*   Si pesa más, lo sube automáticamente a **GoFile** y te da el link.
+*Comandos*: `!descargar <url>`
 
-## 📂 Estructura del Proyecto
-*   `core.py`: Lógica principal de descarga y procesamiento (Brain 🧠).
-*   `app.py`: Interfaz gráfica (Tkinter).
-*   `bot.py`: Cliente de Discord.
-*   `PDF/`: Carpeta donde se guardan los archivos finales.
+### Docker
+Descargar e iniciar el contenedor en segundo plano:
+```bash
+docker build -t manga-downloader .
+docker run -d --env-file .env --name manga-bot manga-downloader
+```
 
----
-*Desarrollado con ayuda de Gemini* 🤖✨
+## Estructura
+- `core.py`: Lógica de descarga y procesamiento.
+- `app.py`: GUI (Tkinter).
+- `bot.py`: Cliente de Discord.
+- `PDF/`: Directorio de salida.
