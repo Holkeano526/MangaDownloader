@@ -1,7 +1,6 @@
 @echo off
 echo Installing Python dependencies...
 pip install -r requirements.txt
-pip install -r requirements-web.txt
 
 echo Starting Backend Server...
 start "Manga Downloader Backend" cmd /k "python web_server.py"
