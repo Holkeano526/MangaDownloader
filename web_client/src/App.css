@@ -1,0 +1,194 @@
+/* Custom dark mode enhancements */
+/* Import Geo, Asimovian, and Turret Road fonts */
+@import url('https://fonts.googleapis.com/css2?family=Asimovian&family=Geo:ital@0;1&family=Turret+Road:wght@200;300;400;500;700;800&display=swap');
+
+body {
+  background-color: #121212;
+  background-image: linear-gradient(rgba(0, 0, 0, 0.7), rgba(0, 0, 0, 0.7)), url('./assets/wallpaper.jpg');
+  background-size: cover;
+  background-position: center;
+  background-attachment: fixed;
+  background-repeat: no-repeat;
+  min-height: 100vh;
+  color: #e0e0e0;
+  font-family: 'Roboto', sans-serif;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6,
+.btn,
+.navbar-brand {
+  font-family: 'Asimovian', 'Orbitron', sans-serif;
+  /* Asimovian for titles */
+}
+
+/* Specific class for signature */
+.signature-text {
+  font-family: "Geo", sans-serif;
+  font-weight: 400;
+  font-style: italic;
+  /* Style matching glitch/hacker vibe */
+}
+
+/* Input field styling */
+.form-control {
+  font-family: "Turret Road", sans-serif !important;
+  font-weight: 500;
+  letter-spacing: 1px;
+}
+
+/* Glassmorphism for the main card */
+.glass-card {
+  background: rgba(30, 30, 30, 0.85) !important;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.1) !important;
+  transition: transform 0.3s ease, box-shadow 0.3s ease;
+}
+
+.glass-card:hover {
+  box-shadow: 0 0 30px rgba(255, 255, 255, 0.15) !important;
+  /* White glow */
+}
+
+/* Title Animation (White/Silver Pulse) */
+@keyframes neonPulse {
+  0% {
+    text-shadow: 0 0 10px rgba(255, 255, 255, 0.3);
+    transform: scale(1);
+  }
+
+  50% {
+    text-shadow: 0 0 25px rgba(255, 255, 255, 0.6), 0 0 10px rgba(180, 180, 180, 0.5);
+    transform: scale(1.02);
+  }
+
+  100% {
+    text-shadow: 0 0 10px rgba(255, 255, 255, 0.3);
+    transform: scale(1);
+  }
+}
+
+.title-animate {
+  /* White to Gray Gradient */
+  background: linear-gradient(135deg, #ffffff 0%, #aaaaaa 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: neonPulse 4s infinite ease-in-out;
+  /* Slightly slower pulse */
+  display: inline-block;
+}
+
+/* Button Animations */
+.btn-animate {
+  transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+  position: relative;
+  overflow: hidden;
+}
+
+.btn-animate:hover:not(:disabled) {
+  transform: translateY(-3px) scale(1.02);
+  box-shadow: 0 10px 20px rgba(0, 0, 0, 0.2);
+}
+
+.btn-animate:active:not(:disabled) {
+  transform: translateY(-1px) scale(0.98);
+}
+
+/* Neon Glow for Primary Button overrides */
+.neon-button {
+  box-shadow: 0 0 15px rgba(0, 255, 136, 0.4);
+  border: 1px solid rgba(0, 255, 136, 0.5);
+}
+
+.neon-button:hover:not(:disabled) {
+  box-shadow: 0 0 30px rgba(0, 255, 136, 0.7);
+  background-color: #00ff88 !important;
+  color: #000 !important;
+  border-color: #00ff88;
+}
+
+/* Log Entry Animation */
+@keyframes slideInUp {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.log-entry-animate {
+  animation: slideInUp 0.3s ease-out forwards;
+  border-left: 2px solid transparent;
+  padding-left: 5px;
+  transition: border-color 0.2s;
+}
+
+.log-entry-animate:hover {
+  border-left-color: #00ff88;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #000;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #444;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #00ff88;
+}
+
+/* Fade In for Containers */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.5s ease-out forwards;
+}
+
+/* Log Window Styling */
+.log-window {
+  font-size: 0.85rem;
+  line-height: 1.5;
+  background: rgba(0, 0, 0, 0.6) !important;
+  backdrop-filter: blur(5px);
+  box-shadow: inset 0 0 20px rgba(0, 0, 0, 0.8);
+}
+
+/* Responsive tweaks */
+@media (max-width: 576px) {
+  .display-5 {
+    font-size: 1.8rem;
+  }
+
+  .card-body {
+    padding: 1.5rem !important;
+  }
+}

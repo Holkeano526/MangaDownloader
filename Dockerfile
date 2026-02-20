@@ -1,28 +1,31 @@
-# Usar una imagen base de Python oficial ligera
-FROM python:3.11-slim
 
-# Evitar que Python genere archivos .pyc y buffers en stdout
-ENV PYTHONDONTWRITEBYTECODE=1
-ENV PYTHONUNBUFFERED=1
+# Python base image
+FROM python:3.10-slim
 
-# Establecer directorio de trabajo
 WORKDIR /app
 
-# Instalar dependencias del sistema necesarias
+# Install system dependencies
 RUN apt-get update && apt-get install -y \
-    git \
     wget \
+    gnupg \
     && rm -rf /var/lib/apt/lists/*
 
-# Copiar requirements e instalar dependencias de Python
 COPY requirements.txt .
+COPY requirements-web.txt .
+
+# Install Python deps
 RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements-web.txt
 
-# Instalar navegadores de Playwright y sus dependencias de sistema
-RUN playwright install --with-deps chromium
+# Install Playwright browsers
+RUN playwright install chromium
+RUN playwright install-deps
 
-# Copiar el resto del código
+# Copy app code
 COPY . .
 
-# Comando por defecto al iniciar el contenedor
-CMD ["python", "bot.py"]
+# Expose port (FastAPI default)
+EXPOSE 8000
+
+# Run the server
+CMD ["python", "web_server.py"]

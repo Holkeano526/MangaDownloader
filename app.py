@@ -1,8 +1,10 @@
+
 import tkinter as tk
 from tkinter import ttk, scrolledtext, messagebox
 import threading
 import asyncio
 import core 
+import core.config
 
 class DownloaderApp:
     def __init__(self, root: tk.Tk):
@@ -31,7 +33,7 @@ class DownloaderApp:
         self.url_entry = ttk.Entry(input_frame)
         self.url_entry.pack(fill=tk.X, pady=(5, 10))
         
-        self.placeholder_text = "Pega tu URL aquí..."
+        self.placeholder_text = "Pegar URL aquí..."
         self.url_entry.insert(0, self.placeholder_text)
         self.url_entry.config(foreground='grey')
 
@@ -41,7 +43,7 @@ class DownloaderApp:
         self.btn_start = ttk.Button(input_frame, text="Descargar PDF", command=self.start_process)
         self.btn_start.pack(fill=tk.X, pady=(0, 5))
         
-        self.btn_cancel = ttk.Button(input_frame, text="Cancelar Detener", command=self.cancel_process, state='disabled')
+        self.btn_cancel = ttk.Button(input_frame, text="Detener", command=self.cancel_process, state='disabled')
         self.btn_cancel.pack(fill=tk.X, pady=(0, 5))
 
         # Progress Bar
@@ -72,7 +74,6 @@ class DownloaderApp:
         self.log_area.see(tk.END)
         self.log_area.config(state='disabled')
         
-        # File Logging
         try:
             with open("downloader_debug.log", "a", encoding="utf-8") as f:
                 f.write(message + "\n")
@@ -90,12 +91,11 @@ class DownloaderApp:
              messagebox.showwarning("Aviso", "URL no soportada.\nDominios válidos: tmohentai, m440.in, hentai2read, hitomi.la, nhentai.net, zonatmo")
              return
         
-        # Init Log
         try:
             with open("downloader_debug.log", "w", encoding="utf-8") as f:
                 f.write("=== LOG START ===\n")
         except Exception as e:
-            print(f"Error escribiendo log: {e}")
+            print(f"Error writing log: {e}")
         
         self.progress['value'] = 0
         self.btn_start.config(state='disabled')
@@ -104,15 +104,14 @@ class DownloaderApp:
         self.log_area.delete(1.0, tk.END)
         self.log_area.config(state='disabled')
         
-        # Configurar Core para App
-        core.OPEN_RESULT_ON_FINISH = True
+        # Use config module to set flag
+        core.config.OPEN_RESULT_ON_FINISH = True
         
-        # Run in separate thread to prevent GUI freeze
         threading.Thread(target=self.run_async, args=(url,), daemon=True).start()
 
     def cancel_process(self) -> None:
         self.cancelled = True
-        self.log("[AVISO] Solicitando cancelación...")
+        self.log("[INFO] Cancelando...")
         self.btn_cancel.config(state='disabled')
 
     def run_async(self, url: str) -> None:
@@ -127,7 +126,7 @@ class DownloaderApp:
                 self.progress['maximum'] = total
                 self.progress['value'] = current
             self.root.after(0, _update)
-
+        
         try:
             loop.run_until_complete(core.process_entry(url, safe_log, check_cancel, progress_callback=safe_progress))
         finally:

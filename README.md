@@ -1,73 +1,112 @@
-# Manga Downloader
+# Universal Manga PDF Downloader
 
-Herramienta en Python para descargar mangas y doujinshis desde múltiples fuentes, convirtiéndolos automáticamente a PDF. Diseñada para gestionar protecciones anti-bot (Cloudflare, 403) y facilitar la lectura offline.
+A powerful tool to automate manga downloads from popular sites and convert them into high-quality PDFs. Now featuring a robust **Web Interface** and **Modular Core**.
 
-## Características
+![Python](https://img.shields.io/badge/Python-3.10%2B-blue)
+![FastAPI](https://img.shields.io/badge/FastAPI-0.95%2B-009688)
+![React](https://img.shields.io/badge/React-Vite-61DAFB)
+![Playwright](https://img.shields.io/badge/Playwright-Automation-orange)
 
-- **Soporte Multi-sitio**: Descarga desde TMO, ZonaTMO, M4\*\*, H2R, Hi\*\*\*\* y nh\*\*\*\*\*.
-- **Conversión Automática**: Genera un único archivo PDF por capítulo o galería.
-- **Modos de Ejecución**:
-  - **GUI Local**: Interfaz gráfica simple (Tkinter) para escritorio.
-  - **Bot de Discord**: Ejecución remota con subida automática a Discord o GoFile para archivos grandes.
-- **Evasión de Protecciones**: Uso de Playwright y headers personalizados para sitios protegidos.
-- **Docker Ready**: Listo para desplegar en contenedores.
+##  New Features & Technologies
 
-## Sitios Soportados
+###  Architecture
+-   **Modular Core**: Completely refactored `core` package using the Strategy Pattern for easy extension.
+-   **Asynchronous I/O**: Built on `asyncio` and `aiohttp` for high-performance concurrent downloads.
+-   **Smart Extraction**: Utilizes **Crawl4AI** and **Google Gemini 1.5 Flash** for intelligent image extraction and parsing of complex sites.
 
-| Sitio | Método | Notas |
-|-------|--------|-------|
-| **ZonaTMO / TMO** | Crawler | Series completas y capítulos individuales |
-| **M4\*\*.in** | Crawler | Portadas y capítulos |
-| **H2R** | JSON API | Extracción directa |
-| **Hi\*\*\*\*.la** | Playwright | Imágenes Full Resolution |
-| **nh\*\*\*\*\*.net** | Playwright | Bypass Cloudflare |
+###  Web Interface
+-   **Modern UI**: Built with **React** and **Vite**.
+-   **Real-time Feedback**: WebSocket integration for live logs and progress bars.
+-   **Dual Server**: Managed by `START_WEB_VERSION.bat` which launches both Backend (FastAPI) and Frontend.
 
-## Instalación
+###  enhanced Automation
+-   **Playwright Integration**: Bypasses Cloudflare and 403 Forbidden errors on strict sites (Hi.la, NH).
+-   **Browser Simulation**: Mimics real user behavior for "Stealth Mode" scraping.
 
-1.  **Clonar repositorio**
+---
+
+##  Supported Sites
+
+| Site | Method | Technology | Notes |
+|------|--------|------------|-------|
+| **Z-TMO** | Crawler + Cascade | **Crawl4AI + Gemini** | Supports full series and single chapters. |
+| **TMO-H** | AI Extraction | **Crawl4AI + Gemini** | Intelligent image detection. |
+| **M440** | Crawler | **Crawl4AI** | Supports covers and chapters. |
+| **H2R**| JSON Parsing | **AsyncIO** | Fast metadata extraction. |
+| **Hi.la** | Stealth Browser | **Playwright** | Bypasses 404/403 protection. |
+| **NH.net**| API + Browser | **Playwright** | Bypasses Cloudflare. |
+
+---
+
+## 📦 Installation
+
+1.  **Clone the repository:**
     ```bash
     git clone https://github.com/Holkeano526/MangaDownloader.git
-    cd manga-downloader
+    cd MangaDownloader
     ```
 
-2.  **Instalar dependencias**
+2.  **Environment Setup:**
+    Create a `.env` file in the root directory:
+    ```ini
+    GOOGLE_API_KEY=your_gemini_api_key
+    DISCORD_TOKEN=your_discord_token  # Optional
+    HEADLESS=true                     # Optional (Default: false)
+    ```
+
+3.  **Install Dependencies:**
     ```bash
     pip install -r requirements.txt
     playwright install chromium
     ```
 
-3.  **Configuración**
-    Renombra `.env.example` a `.env` y configura tus credenciales (necesario para el Bot de Discord o TMO).
+---
 
-## Uso
+## 💻 Usage
 
-### Interfaz de Escritorio
+### Option A: Web Version (Recommended)
+Launch the full full-stack application (Backend + Frontend):
+1.  Double-click `START_WEB_VERSION.bat`.
+2.  The browser will open automatically at `http://localhost:5173`.
+3.  Paste a link and watch the magic happen!
+
+### Option B: Desktop App (Legacy GUI)
+Run the standalone Tkinter interface:
 ```bash
 python app.py
 ```
 
-### Bot de Discord
+### Option C: Discord Bot
+Run the Discord bot for remote downloading:
 ```bash
 python bot.py
 ```
-*Comandos*: `!descargar <url>`
+*   **Command:** `!descargar <url>`
+*   Files >8MB are automatically uploaded to **GoFile**.
 
-### Docker
-Descargar e iniciar el contenedor en segundo plano:
-```bash
-docker build -t manga-downloader .
-docker run -d --env-file .env --name manga-bot manga-downloader
+---
+
+## 📂 Project Structure
+
+```
+MangaDownloader/
+├── core/                   # Refactored Core Package
+│   ├── sites/              # Site Handlers (Strategy Pattern)
+│   ├── config.py           # Configuration
+│   ├── handler.py          # Routing Logic
+│   └── utils.py            # PDF & Download Utils
+├── web_client/             # React Frontend
+├── app.py                  # Legacy Tkinter GUI
+├── bot.py                  # Discord Bot
+├── web_server.py           # FastAPI Backend
+└── PDF/                    # Output Directory
 ```
 
-## Funcionamiento Interno
-El script sigue un proceso optimizado para mantener tu sistema limpio:
-1.  **Directorio Temporal**: Al iniciar una descarga, se crea automáticamente la carpeta `temp_manga_images/` donde se guardan las imágenes crudas (.jpg, .webp, etc.).
-2.  **Conversión**: Una vez descargadas todas las páginas, se procesan y compilan en un único archivo.
-3.  **Salida**: El archivo final se guarda en la carpeta `PDF/`.
-4.  **Limpieza**: Al finalizar (o si ocurre un error controlado), la carpeta `temp_manga_images/` se elimina automáticamente para no ocupar espacio innecesario.
+## 🐳 Docker
 
-## Estructura
-- `core.py`: Lógica de descarga y procesamiento.
-- `app.py`: GUI (Tkinter).
-- `bot.py`: Cliente de Discord.
-- `PDF/`: Directorio donde se guardan los mangas descargados.
+Run the entire stack in containers:
+```bash
+docker-compose up --build
+```
+*   Backend: `http://localhost:8000`
+*   Frontend: `http://localhost:8080`

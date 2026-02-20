@@ -1,0 +1,25 @@
+version: '3.8'
+
+services:
+  backend:
+    build: .
+    container_name: manga_backend
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./PDF:/app/PDF
+      - ./.env:/app/.env
+    restart: unless-stopped
+    command: python web_server.py # Ensure web_server runs, not default script
+
+  frontend:
+    build:
+      context: ./web_client
+      dockerfile: Dockerfile
+    container_name: manga_frontend
+    ports:
+      - "8080:80" # Exposed on port 8080 host machine
+    depends_on:
+      - backend
+    restart: unless-stopped
+    # Nginx config is copied in Dockerfile
