@@ -1,4 +1,12 @@
 
+"""
+Module: web_server
+Description: The primary FastAPI backend server for the Manga Downloader Web Client.
+It provides HTTP endpoints for serving generated PDFs safely and a WebSocket 
+interface for real-time progress updates, logs, and process management (start/cancel).
+It includes security middleware for CORS, Path Traversal (LFI) prevention, 
+and simple DoS rate limiting.
+"""
 import os
 import sys
 import asyncio
@@ -17,11 +25,15 @@ core.config.OPEN_RESULT_ON_FINISH = False
 
 app = FastAPI()
 
+# [SEGURIDAD - OPEN SOURCE]
+# Mitigación de vulnerabilidad CORS (Cross-Origin Resource Sharing).
+# Evitar el uso de allow_origins=["*"] junto con allow_credentials=True, ya que 
+# permitiría a cualquier página web maliciosa externa conectarse al servidor local del usuario.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["http://localhost:3000", "http://localhost:5173", "http://127.0.0.1:3000", "http://127.0.0.1:5173"],
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["*"],
 )
 
@@ -34,23 +46,36 @@ if not os.path.exists(pdf_dir):
 @app.get("/pdfs/{filename:path}")
 async def get_pdf(filename: str):
     filename = unquote(filename)
-    file_path = os.path.join(pdf_dir, filename)
-    print(f"DEBUG: Request for PDF. Filename='{filename}'. Path='{file_path}'")
     
-    if os.path.exists(file_path):
+    # [SEGURIDAD - OPEN SOURCE]
+    # Prevención de Path Traversal / Local File Inclusion (LFI).
+    # Este bloque asegura que un atacante no pueda inyectar secuencias como '../../'
+    # en la URL para leer archivos del sistema (ej. contraseñas, código fuente).
+    # Se fuerza al sistema operativo a resolver la ruta absoluta real y se verifica
+    # matemáticamente que dicha ruta nazca OBLIGATORIAMENTE desde la carpeta 'pdf_dir'.
+    target_path = os.path.abspath(os.path.join(pdf_dir, filename))
+    if not target_path.startswith(os.path.abspath(pdf_dir)):
+        print(f"SECURITY WARNING: Attempted path traversal for '{filename}'. Blocked.")
+        return {"error": "Invalid file path requested."}
+    
+    print(f"DEBUG: Request for PDF. Filename='{filename}'. Path='{target_path}'")
+    
+    if os.path.exists(target_path) and os.path.isfile(target_path):
         print("DEBUG: File found. Serving...")
-        response = FileResponse(file_path, media_type="application/pdf")
-        response.headers["Access-Control-Allow-Origin"] = "*"
-        response.headers["Access-Control-Allow-Methods"] = "GET, HEAD, OPTIONS"
-        response.headers["Access-Control-Allow-Headers"] = "*"
+        response = FileResponse(target_path, media_type="application/pdf")
         response.headers["Content-Disposition"] = "inline"
         return response
     
     print("DEBUG: File NOT found.")
-    return {"error": f"File not found: {filename}"}
+    return {"error": "File not found."}
+
+# Basic DoS Protection: Limit active downloads
+ACTIVE_DOWNLOADS = 0
+MAX_DOWNLOADS = 3
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
+    global ACTIVE_DOWNLOADS
     await websocket.accept()
     
     cancel_event = asyncio.Event()
@@ -74,6 +99,12 @@ async def websocket_endpoint(websocket: WebSocket):
                     await websocket.send_json({"type": "error", "message": "No URL provided"})
                     continue
                 
+                # SECURITY PATCH: DoS / Resource Exhaustion Protection
+                if ACTIVE_DOWNLOADS >= MAX_DOWNLOADS:
+                    await websocket.send_json({"type": "error", "message": "Server is currently busy. Please try again later."})
+                    continue
+                
+                ACTIVE_DOWNLOADS += 1
                 is_cancelled = False
                 await websocket.send_json({"type": "status", "status": "running"})
                 
@@ -119,8 +150,13 @@ async def websocket_endpoint(websocket: WebSocket):
                         "filename": final_filename
                     })
                 except Exception as e:
-                    await websocket.send_json({"type": "error", "message": str(e)})
+                    # SECURITY PATCH: Information Leakage Prevention
+                    # Log the actual error to the console, send a sanitized message to the client
+                    logging.error(f"Internal processing error: {e}")
+                    await websocket.send_json({"type": "error", "message": "An unexpected internal error occurred during processing."})
                     await websocket.send_json({"type": "status", "status": "error"})
+                finally:
+                    ACTIVE_DOWNLOADS = max(0, ACTIVE_DOWNLOADS - 1)
             
             elif command == "cancel":
                 is_cancelled = True

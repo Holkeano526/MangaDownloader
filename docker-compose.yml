@@ -10,16 +10,17 @@ services:
       - ./PDF:/app/PDF
       - ./.env:/app/.env
     restart: unless-stopped
-    command: python web_server.py # Ensure web_server runs, not default script
+    command: python web_server.py
 
   frontend:
     build:
-      context: ./web_client
+      context: ./web_client_next
       dockerfile: Dockerfile
     container_name: manga_frontend
     ports:
-      - "8080:80" # Exposed on port 8080 host machine
+      - "3000:3000" # Next.js exposed on port 3000
     depends_on:
       - backend
     restart: unless-stopped
-    # Nginx config is copied in Dockerfile
+    environment:
+      - NODE_ENV=production

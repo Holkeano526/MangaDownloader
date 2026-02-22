@@ -1,4 +1,8 @@
-
+"""
+Module: core.utils
+Description: Provides shared utilities for file system management, 
+asynchronous image downloading, and PDF compilation for the Manga Downloader.
+"""
 import os
 import re
 import shutil
@@ -14,14 +18,36 @@ except ImportError:
 from .config import PDF_FOLDER_NAME, TEMP_FOLDER_NAME, BATCH_SIZE
 
 def clean_filename(text: str) -> str:
-    """Sanitizes the filename for Windows/Linux."""
+    """
+    Sanitizes the string to create a valid Windows/Linux file or directory name.
+    Strips HTML tags and removes reserved characters `\ / * ? : " < > |`.
+    
+    Args:
+        text (str): The raw title string to be sanitized.
+        
+    Returns:
+        str: A safe file name string. Defaults to 'untitled' if empty.
+    """
     if not text: return "untitled"
     text = re.sub(r'<[^>]+>', '', text)
     safe = re.sub(r'[\\/*?:"<>|]', "", text).strip()
     return safe if safe else "untitled"
 
 async def download_image(session: aiohttp.ClientSession, url: str, folder: str, index: int, log_callback: Callable[[str], None], headers: dict) -> Optional[str]:
-    """Downloads a single image and returns its local path."""
+    """
+    Downloads a single image asynchronously and saves it to a persistent local path.
+    
+    Args:
+        session (aiohttp.ClientSession): The active asynchronous HTTP session.
+        url (str): The direct image URL.
+        folder (str): The local directory to save the image (usually a temporary folder).
+        index (int): The page order index, used to ensure correct sorting in the PDF structure.
+        log_callback (Callable): Callback interface to send errors/logs to the frontend.
+        headers (dict): HTTP headers to bypass bot-protections (Cloudflare, User-Agent, etc).
+        
+    Returns:
+        Optional[str]: The absolute path to the downloaded image if successful, else None.
+    """
     try:
         # Determine extension
         ext = ".jpg"

@@ -1,4 +1,11 @@
 
+"""
+Module: bot
+Description: A Discord API integration (Discord Bot) for the Manga Downloader.
+It allows users to trigger downloads via Discord commands (e.g., !descargar <url>).
+The bot features live-updating embed messages for progress logs and automatically 
+uploads files exceeding Discord's 8MB limit to GoFile for easy user retrieval.
+"""
 import discord
 from discord.ext import commands
 import os

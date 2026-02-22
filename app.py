@@ -1,4 +1,11 @@
 
+"""
+Module: app
+Description: A standalone Tkinter Desktop GUI client for the Manga Downloader.
+It provides a native Windows interface for users who prefer a local executable 
+over the web-based Next.js dashboard. It wraps the core downloading logic in asynchronous 
+threads to keep the UI responsive during downloads.
+"""
 import tkinter as tk
 from tkinter import ttk, scrolledtext, messagebox
 import threading
