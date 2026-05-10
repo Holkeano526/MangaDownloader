@@ -1,0 +1,141 @@
+@import url('https://fonts.googleapis.com/css2?family=Geo:ital@0;1&family=Turret+Road:wght@200;300;400;500;700;800&family=Orbitron:wght@400;500;700;900&display=swap');
+@import "tailwindcss";
+@import 'sileo/styles.css';
+
+/* Assuming Asimovian was a custom font or similar, we use Orbitron as fallback for sci-fi look as per original */
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-title: 'Orbitron', sans-serif;
+  --font-signature: 'Geo', sans-serif;
+  --font-input: 'Turret Road', sans-serif;
+}
+
+:root {
+  --background: #121212;
+  --foreground: #e0e0e0;
+}
+
+body {
+  background-color: var(--background);
+  color: var(--foreground);
+  font-family: 'Roboto', sans-serif;
+  /* Next.js doesn't easily resolve relative bg images from css without right paths, we'll apply background via Tailwind or inline style in a wrapper, but let's try moving it to next/image or fixed div */
+  min-height: 100vh;
+}
+
+/* Glassmorphism */
+.glass-card {
+  background: rgba(30, 30, 30, 0.85);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  transition: transform 0.3s ease, box-shadow 0.3s ease;
+}
+
+.glass-card:hover {
+  box-shadow: 0 0 30px rgba(255, 255, 255, 0.15);
+}
+
+/* Text pulse animation */
+@keyframes neonPulse {
+  0% {
+    text-shadow: 0 0 10px rgba(255, 255, 255, 0.3);
+    transform: scale(1);
+  }
+
+  50% {
+    text-shadow: 0 0 25px rgba(255, 255, 255, 0.6), 0 0 10px rgba(180, 180, 180, 0.5);
+    transform: scale(1.02);
+  }
+
+  100% {
+    text-shadow: 0 0 10px rgba(255, 255, 255, 0.3);
+    transform: scale(1);
+  }
+}
+
+.title-animate {
+  background: linear-gradient(135deg, #ffffff 0%, #aaaaaa 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: neonPulse 4s infinite ease-in-out;
+  display: inline-block;
+  line-height: 1.5;
+  padding-bottom: 0.3em;
+  padding-top: 0.1em;
+}
+
+/* Log entry */
+@keyframes slideInUp {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.log-entry-animate {
+  animation: slideInUp 0.3s ease-out forwards;
+  border-left: 2px solid transparent;
+  padding-left: 5px;
+  transition: border-color 0.2s;
+}
+
+.log-entry-animate:hover {
+  border-left-color: #00ff88;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+/* Log Window */
+.log-window {
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(5px);
+  box-shadow: inset 0 0 20px rgba(0, 0, 0, 0.8);
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #000;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #444;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #00ff88;
+}
+
+/* Sileo Responsive Overrides */
+@media (max-width: 640px) {
+  .sileo-viewport {
+    width: 100vw !important;
+    max-width: 100vw !important;
+    right: 0 !important;
+    left: 0 !important;
+    top: 0 !important;
+    /* Move to top on mobile maybe? Or keep bottom? Native is usually bottom right. We'll use bottom center */
+    padding: 1rem !important;
+    display: flex !important;
+    flex-direction: column !important;
+    align-items: center !important;
+    justify-content: flex-end !important;
+  }
+
+  .sileo-toast {
+    width: 100% !important;
+    margin-right: 0 !important;
+    margin-bottom: 0.5rem !important;
+  }
+}
