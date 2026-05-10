@@ -8,6 +8,7 @@ import re
 import shutil
 import asyncio
 import aiohttp
+import uuid
 from typing import List, Optional, Callable
 from PIL import Image
 try:
@@ -172,7 +173,12 @@ async def download_and_make_pdf(image_urls: List[str], output_name: str, headers
     Orchestration function: Downloads images in chunks -> Creates PDF/Folder -> Cleans up.
     """
     project_root = os.getcwd()
-    temp_folder = os.path.join(project_root, TEMP_FOLDER_NAME)
+    
+    # Generate unique temp folder using output name and UUID
+    base_name = os.path.basename(output_name)
+    safe_name = clean_filename(base_name.replace('.pdf', ''))
+    unique_id = uuid.uuid4().hex[:8]
+    temp_folder = os.path.join(project_root, TEMP_FOLDER_NAME, f"{safe_name}_{unique_id}")
     
     # Clean/Create temp folder
     if os.path.exists(temp_folder): shutil.rmtree(temp_folder)

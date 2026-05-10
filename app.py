@@ -17,8 +17,10 @@ class DownloaderApp:
     def __init__(self, root: tk.Tk):
         self.root = root
         self.cancelled = False
+        self.queue = []
+        self.is_processing = False
         self.root.title("Universal Manga Downloader")
-        self.root.geometry("800x600")
+        self.root.geometry("800x700")
         
         # Styles
         style = ttk.Style()
@@ -47,11 +49,18 @@ class DownloaderApp:
         self.url_entry.bind("<FocusIn>", self._on_entry_focus_in)
         self.url_entry.bind("<FocusOut>", self._on_entry_focus_out)
         
-        self.btn_start = ttk.Button(input_frame, text="Descargar PDF", command=self.start_process)
+        self.btn_start = ttk.Button(input_frame, text="Añadir a la cola", command=self.add_to_queue)
         self.btn_start.pack(fill=tk.X, pady=(0, 5))
         
-        self.btn_cancel = ttk.Button(input_frame, text="Detener", command=self.cancel_process, state='disabled')
+        self.btn_cancel = ttk.Button(input_frame, text="Cancelar Descarga Actual", command=self.cancel_process, state='disabled')
         self.btn_cancel.pack(fill=tk.X, pady=(0, 5))
+
+        # Queue Area
+        queue_frame = ttk.LabelFrame(main_frame, text="Cola de Descargas", padding="10")
+        queue_frame.pack(fill=tk.BOTH, expand=False, pady=(0, 15))
+        
+        self.queue_list = tk.Listbox(queue_frame, height=4, font=("Segoe UI", 10))
+        self.queue_list.pack(fill=tk.BOTH, expand=True)
 
         # Progress Bar
         self.progress = ttk.Progressbar(input_frame, orient="horizontal", length=100, mode="determinate")
@@ -86,42 +95,70 @@ class DownloaderApp:
                 f.write(message + "\n")
         except: pass
 
-    def start_process(self) -> None:
-        self.cancelled = False
+    def update_queue_ui(self):
+        self.queue_list.delete(0, tk.END)
+        for i, item in enumerate(self.queue):
+            status = "Procesando" if (i == 0 and self.is_processing) else "Pendiente"
+            self.queue_list.insert(tk.END, f"[{status}] {item}")
+
+    def add_to_queue(self) -> None:
         url = self.url_entry.get().strip()
         if not url or url == self.placeholder_text:
             messagebox.showwarning("Aviso", "Por favor ingrese una URL.")
             return
 
-        supported_domains = ["tmohentai", "m440.in", "mangas.in", "hentai2read", "hitomi.la", "nhentai.net", "zonatmo.com"]
+        supported_domains = ["tmohentai", "m440.in", "mangas.in", "hentai2read", "hitomi.la", "nhentai.net", "zonatmo.com", "fakku.cc"]
         if not any(domain in url for domain in supported_domains):
-             messagebox.showwarning("Aviso", "URL no soportada.\nDominios válidos: tmohentai, m440.in, hentai2read, hitomi.la, nhentai.net, zonatmo")
+             messagebox.showwarning("Aviso", "URL no soportada.\nDominios válidos: tmohentai, m440.in, hentai2read, hitomi.la, nhentai.net, zonatmo, fakku.cc")
              return
+             
+        self.queue.append(url)
+        self.update_queue_ui()
+        self.url_entry.delete(0, tk.END)
+        self.url_entry.insert(0, self.placeholder_text)
+        self.url_entry.config(foreground='grey')
+        
+        if not self.is_processing:
+            threading.Thread(target=self.process_queue, daemon=True).start()
+
+    def process_queue(self) -> None:
+        self.is_processing = True
+        core.config.OPEN_RESULT_ON_FINISH = True
         
         try:
             with open("downloader_debug.log", "w", encoding="utf-8") as f:
                 f.write("=== LOG START ===\n")
         except Exception as e:
             print(f"Error writing log: {e}")
-        
-        self.progress['value'] = 0
-        self.btn_start.config(state='disabled')
-        self.btn_cancel.config(state='normal')
-        self.log_area.config(state='normal')
-        self.log_area.delete(1.0, tk.END)
-        self.log_area.config(state='disabled')
-        
-        # Use config module to set flag
-        core.config.OPEN_RESULT_ON_FINISH = True
-        
-        threading.Thread(target=self.run_async, args=(url,), daemon=True).start()
+            
+        while self.queue:
+            url = self.queue[0]
+            self.cancelled = False
+            
+            self.root.after(0, self.update_queue_ui)
+            self.root.after(0, lambda: self.btn_cancel.config(state='normal'))
+            self.root.after(0, lambda: self.progress.config(value=0))
+            self.root.after(0, lambda: self.log_area.config(state='normal'))
+            self.root.after(0, lambda: self.log_area.delete(1.0, tk.END))
+            self.root.after(0, lambda: self.log_area.config(state='disabled'))
+            
+            self.run_async_blocking(url)
+            
+            if self.queue:
+                self.queue.pop(0)
+            
+            self.root.after(0, self.update_queue_ui)
+            
+        self.is_processing = False
+        self.root.after(0, lambda: self.btn_cancel.config(state='disabled'))
+        self.root.after(0, lambda: self.progress.config(value=0))
 
     def cancel_process(self) -> None:
         self.cancelled = True
         self.log("[INFO] Cancelando...")
         self.btn_cancel.config(state='disabled')
 
-    def run_async(self, url: str) -> None:
+    def run_async_blocking(self, url: str) -> None:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         
@@ -138,11 +175,6 @@ class DownloaderApp:
             loop.run_until_complete(core.process_entry(url, safe_log, check_cancel, progress_callback=safe_progress))
         finally:
             loop.close()
-            self.root.after(0, lambda: self.reset_buttons())
-            
-    def reset_buttons(self):
-        self.btn_start.config(state='normal')
-        self.btn_cancel.config(state='disabled')
 
 if __name__ == "__main__":
     root = tk.Tk()

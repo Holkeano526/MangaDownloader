@@ -29,6 +29,9 @@ intents.message_content = True
 
 bot = commands.Bot(command_prefix='!', intents=intents)
 
+# Global lock to serialize downloads and prevent high RAM usage
+download_lock = asyncio.Lock()
+
 class DiscordLogAdapter:
     """
     Redirects core logs to an editable Discord message.
@@ -160,12 +163,15 @@ async def descargar(ctx, url: str):
     def progress_adapter(current, total): pass
 
     try:
-        await core.process_entry(
-            url, 
-            logger.log_callback, 
-            check_cancel, 
-            progress_callback=progress_adapter
-        )
+        # Prevent concurrent downloads using the global lock
+        await ctx.send("⏳ Solicitud recibida. Esperando en cola..." if download_lock.locked() else "⏳ Iniciando descarga...")
+        async with download_lock:
+            await core.process_entry(
+                url, 
+                logger.log_callback, 
+                check_cancel, 
+                progress_callback=progress_adapter
+            )
         
         await asyncio.sleep(1)
         

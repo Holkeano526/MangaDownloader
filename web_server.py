@@ -11,6 +11,7 @@ import os
 import sys
 import asyncio
 import logging
+import uuid
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
@@ -69,105 +70,139 @@ async def get_pdf(filename: str):
     print("DEBUG: File NOT found.")
     return {"error": "File not found."}
 
-# Basic DoS Protection: Limit active downloads
-ACTIVE_DOWNLOADS = 0
-MAX_DOWNLOADS = 3
+# Global Download Manager for Queue System
+class DownloadManager:
+    def __init__(self):
+        self.queue = []
+        self.connections = []
+        self.is_processing = False
+        self.current_cancel_flag = False
+
+    async def broadcast(self):
+        state = {"type": "queue_state", "queue": self.queue}
+        # Create a copy to iterate safely
+        for conn in list(self.connections):
+            try:
+                await conn.send_json(state)
+            except:
+                if conn in self.connections:
+                    self.connections.remove(conn)
+
+    async def add_url(self, url):
+        item_id = uuid.uuid4().hex[:8]
+        self.queue.append({
+            "id": item_id,
+            "url": url,
+            "status": "pending",
+            "filename": None,
+            "progress": 0,
+            "current": 0,
+            "total": 100,
+            "logs": []
+        })
+        await self.broadcast()
+        if not self.is_processing:
+            asyncio.create_task(self.process_queue())
+
+    async def process_queue(self):
+        self.is_processing = True
+        while True:
+            pending_items = [i for i in self.queue if i["status"] == "pending"]
+            if not pending_items:
+                break
+            
+            item = pending_items[0]
+            item["status"] = "running"
+            item["logs"].append("[INFO] Starting download...")
+            self.current_cancel_flag = False
+            await self.broadcast()
+
+            def log_callback(msg):
+                item["logs"].append(msg)
+                if "[SUCCESS] PDF Generated:" in msg:
+                    try:
+                        item["filename"] = msg.split("PDF Generated:")[1].strip()
+                    except: pass
+                
+                try:
+                    loop = asyncio.get_event_loop()
+                    if loop.is_running():
+                        loop.create_task(self.broadcast())
+                    else:
+                        asyncio.run(self.broadcast())
+                except: pass
+
+            def progress_callback(current, total):
+                item["current"] = current
+                item["total"] = total
+                item["progress"] = int((current / total) * 100) if total else 0
+                try:
+                    loop = asyncio.get_event_loop()
+                    if loop.is_running():
+                        loop.create_task(self.broadcast())
+                except: pass
+
+            def check_cancel():
+                return self.current_cancel_flag or item.get("cancelled", False)
+
+            try:
+                await core.process_entry(item["url"], log_callback, check_cancel, progress_callback)
+                if item.get("cancelled", False) or self.current_cancel_flag:
+                    item["status"] = "cancelled"
+                else:
+                    item["status"] = "completed"
+            except Exception as e:
+                logging.error(f"Internal error: {e}")
+                item["status"] = "error"
+                item["logs"].append(f"ERROR: {str(e)}")
+            
+            await self.broadcast()
+        
+        self.is_processing = False
+
+    async def cancel_item(self, item_id):
+        for item in self.queue:
+            if item["id"] == item_id:
+                if item["status"] == "pending":
+                    item["status"] = "cancelled"
+                elif item["status"] == "running":
+                    self.current_cancel_flag = True
+                    item["status"] = "cancelled"
+        await self.broadcast()
+
+manager = DownloadManager()
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
-    global ACTIVE_DOWNLOADS
     await websocket.accept()
-    
-    cancel_event = asyncio.Event()
-    is_cancelled = False
-    
-    def check_cancel():
-        return is_cancelled
+    manager.connections.append(websocket)
+    await websocket.send_json({"type": "queue_state", "queue": manager.queue})
     
     try:
         while True:
-            try:
-                data = await websocket.receive_json()
-            except WebSocketDisconnect:
-                break
-                
+            data = await websocket.receive_json()
             command = data.get("command")
             
             if command == "start":
                 url = data.get("url")
-                if not url:
-                    await websocket.send_json({"type": "error", "message": "No URL provided"})
-                    continue
-                
-                # SECURITY PATCH: DoS / Resource Exhaustion Protection
-                if ACTIVE_DOWNLOADS >= MAX_DOWNLOADS:
-                    await websocket.send_json({"type": "error", "message": "Server is currently busy. Please try again later."})
-                    continue
-                
-                ACTIVE_DOWNLOADS += 1
-                is_cancelled = False
-                await websocket.send_json({"type": "status", "status": "running"})
-                
-                generated_pdf_name = []
-
-                def log_callback(msg):
-                    # Updated to match core.py new log format
-                    if "[SUCCESS] PDF Generated:" in msg:
-                        try:
-                            # Parse filename from log
-                            name = msg.split("PDF Generated:")[1].strip()
-                            generated_pdf_name.append(name)
-                        except: pass
-                    
-                    # Create task to safely send message
-                    loop = asyncio.get_event_loop()
-                    if loop.is_running():
-                        loop.create_task(websocket.send_json({"type": "log", "message": msg}))
-                    else:
-                        asyncio.run(websocket.send_json({"type": "log", "message": msg}))
-                    
-                def progress_callback(current, total):
-                    loop = asyncio.get_event_loop()
-                    if loop.is_running():
-                         loop.create_task(websocket.send_json({
-                            "type": "progress", 
-                            "current": current, 
-                            "total": total
-                        }))
-
-                try:
-                    await core.process_entry(
-                        url, 
-                        log_callback, 
-                        check_cancel, 
-                        progress_callback=progress_callback
-                    )
-                    
-                    final_filename = generated_pdf_name[0] if generated_pdf_name else None
-                    await websocket.send_json({
-                        "type": "status", 
-                        "status": "completed",
-                        "filename": final_filename
-                    })
-                except Exception as e:
-                    # SECURITY PATCH: Information Leakage Prevention
-                    # Log the actual error to the console, send a sanitized message to the client
-                    logging.error(f"Internal processing error: {e}")
-                    await websocket.send_json({"type": "error", "message": "An unexpected internal error occurred during processing."})
-                    await websocket.send_json({"type": "status", "status": "error"})
-                finally:
-                    ACTIVE_DOWNLOADS = max(0, ACTIVE_DOWNLOADS - 1)
+                if url:
+                    await manager.add_url(url)
             
             elif command == "cancel":
-                is_cancelled = True
-                await websocket.send_json({"type": "log", "message": "Cancelling..."})
+                item_id = data.get("id")
+                if item_id:
+                    await manager.cancel_item(item_id)
+                else:
+                    manager.current_cancel_flag = True
+                    await manager.broadcast()
                 
+    except WebSocketDisconnect:
+        if websocket in manager.connections:
+            manager.connections.remove(websocket)
     except Exception as e:
         print(f"WebSocket error: {e}")
-    finally:
-        try:
-            await websocket.close()
-        except: pass
+        if websocket in manager.connections:
+            manager.connections.remove(websocket)
 
 if __name__ == "__main__":
     import uvicorn

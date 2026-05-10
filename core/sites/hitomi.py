@@ -5,6 +5,7 @@ Hitomi.la site handler (Stealth Mode).
 import os
 import re
 import shutil
+import uuid
 from typing import Callable, Optional
 from playwright.async_api import async_playwright
 
@@ -41,7 +42,8 @@ class HitomiHandler(BaseSiteHandler):
         
         # Create temp directory
         current_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        temp_dir = os.path.join(current_dir, config.TEMP_FOLDER_NAME)
+        unique_id = uuid.uuid4().hex[:8]
+        temp_dir = os.path.join(current_dir, config.TEMP_FOLDER_NAME, f"hitomi_{gallery_id}_{unique_id}")
         if os.path.exists(temp_dir):
             shutil.rmtree(temp_dir)
         os.makedirs(temp_dir, exist_ok=True)

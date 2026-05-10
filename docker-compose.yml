@@ -10,6 +10,8 @@ services:
       - ./PDF:/app/PDF
       - ./.env:/app/.env
     restart: unless-stopped
+    environment:
+      - HEADLESS=true
     command: python web_server.py
 
   frontend:

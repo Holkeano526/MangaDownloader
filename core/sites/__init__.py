@@ -5,3 +5,4 @@ from .h2r import H2RHandler
 from .hitomi import HitomiHandler
 from .nhentai import NHentaiHandler
 from .zonatmo import ZonaTMOHandler
+from .fakku import FakkuHandler
