@@ -166,12 +166,20 @@ async def descargar(ctx, url: str):
         # Prevent concurrent downloads using the global lock
         await ctx.send("⏳ Solicitud recibida. Esperando en cola..." if download_lock.locked() else "⏳ Iniciando descarga...")
         async with download_lock:
-            await core.process_entry(
+            result = await core.process_entry(
                 url, 
                 logger.log_callback, 
                 check_cancel, 
                 progress_callback=progress_adapter
             )
+            
+        if isinstance(result, list):
+            await ctx.send(f"📚 **Serie detectada**. Se encontraron **{len(result)} capítulos**. Añadiéndolos a la cola...")
+            for sub_url in result:
+                # Disparamos cada capítulo como una solicitud individual
+                # Esto creará un mensaje de Discord para cada uno y respetará el lock global.
+                bot.loop.create_task(ctx.invoke(descargar, url=sub_url))
+            return
         
         await asyncio.sleep(1)
         

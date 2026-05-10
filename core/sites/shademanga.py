@@ -31,9 +31,43 @@ class ShadeMangaHandler(BaseSiteHandler):
         Download images from Shademanga.com using Playwright to extract DOM
         image URLs, then downloading them directly.
         """
+        import aiohttp
+        
+        if "/serie/local/" in url:
+            log_callback(f"[INIT] URL de serie detectada. Extrayendo capítulos de: {url}")
+            try:
+                serie_id = url.rstrip('/').split('/')[-1]
+                api_url = f"https://shademanga.com/api/series-locales/{serie_id}"
+                
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(api_url) as resp:
+                        if resp.status == 200:
+                            data = await resp.json()
+                            capitulos = data.get("capitulos", [])
+                            if not capitulos:
+                                log_callback("[ERROR] No se encontraron capítulos en la API de la serie.")
+                                return None
+                            
+                            # Sort by numeroCapitulo
+                            capitulos.sort(key=lambda x: x.get("numeroCapitulo", 0))
+                            chapter_urls = []
+                            for cap in capitulos:
+                                pid = cap.get("publicId")
+                                if pid:
+                                    chapter_urls.append(f"https://shademanga.com/reader/local/{pid}")
+                                    
+                            log_callback(f"[SUCCESS] Se han extraído {len(chapter_urls)} capítulos.")
+                            return chapter_urls
+                        else:
+                            log_callback(f"[ERROR] Fallo al consultar la API de Shademanga. Código: {resp.status}")
+                            return None
+            except Exception as e:
+                log_callback(f"[ERROR] Error al extraer capítulos de la serie: {e}")
+                return None
+
         if "/reader/" not in url:
-            log_callback("[ERROR] URL no soportada. Solo se permiten enlaces directos al lector de capítulos (ej. /reader/local/...)")
-            return
+            log_callback("[ERROR] URL no soportada. Use un enlace de capítulo (/reader/local/...) o serie (/serie/local/...).")
+            return None
 
         log_callback(f"[INIT] Processing ShadeManga URL: {url}...")
         

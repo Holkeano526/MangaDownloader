@@ -36,7 +36,7 @@ async def process_entry(
     log_callback: Callable[[str], None],
     check_cancel: Callable[[], bool],
     progress_callback: Optional[Callable[[int, int], None]] = None
-) -> None:
+) -> list[str] | None:
     """
     Main Router: Redirects to the specific site handler based on the URL.
     
@@ -65,8 +65,7 @@ async def process_entry(
         # Esto asegura que la petición HTTP que hace el servidor web vaya dirigida exclusivamente 
         # a los dominios oficiales de manga soportados.
         supported = handler.get_supported_domains()
-        if any(domain in hostname for domain in supported):
-            await handler.process(url, log_callback, check_cancel, progress_callback)
-            return
+        if any(domain in hostname for domain in handler.get_supported_domains()):
+            return await handler.process(url, log_callback, check_cancel, progress_callback)
             
     log_callback("[ERROR] Unsupported website.")

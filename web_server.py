@@ -146,8 +146,30 @@ class DownloadManager:
                 return self.current_cancel_flag or item.get("cancelled", False)
 
             try:
-                await core.process_entry(item["url"], log_callback, check_cancel, progress_callback)
-                if item.get("cancelled", False) or self.current_cancel_flag:
+                result = await core.process_entry(item["url"], log_callback, check_cancel, progress_callback)
+                
+                if isinstance(result, list):
+                    item["status"] = "expanded"
+                    item["logs"].append(f"[INFO] Serie detectada. Añadiendo {len(result)} capítulos a la cola...")
+                    
+                    # Insert the new URLs right after the current one, or at the end
+                    import uuid
+                    new_items = []
+                    for u in result:
+                        new_items.append({
+                            "id": str(uuid.uuid4()),
+                            "url": u,
+                            "status": "pending",
+                            "progress": 0,
+                            "current": 0,
+                            "total": 0,
+                            "logs": [],
+                            "filename": None,
+                            "timestamp": __import__("time").time()
+                        })
+                    self.queue.extend(new_items)
+                    
+                elif item.get("cancelled", False) or self.current_cancel_flag:
                     item["status"] = "cancelled"
                 else:
                     item["status"] = "completed"

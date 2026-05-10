@@ -18,7 +18,7 @@ class BaseSiteHandler(ABC):
         log_callback: Callable[[str], None], 
         check_cancel: Callable[[], bool], 
         progress_callback: Optional[Callable[[int, int], None]] = None
-    ) -> None:
+    ) -> list[str] | None:
         """
         Process the given URL to download manga/doujinshi.
         
