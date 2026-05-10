@@ -26,3 +26,14 @@ services:
     restart: unless-stopped
     environment:
       - NODE_ENV=production
+
+  discord_bot:
+    build: .
+    container_name: manga_discord_bot
+    volumes:
+      - ./PDF:/app/PDF
+      - ./.env:/app/.env
+    restart: unless-stopped
+    environment:
+      - HEADLESS=true
+    command: python bot.py
