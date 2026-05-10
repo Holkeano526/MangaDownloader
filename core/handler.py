@@ -13,7 +13,8 @@ from .sites import (
     HitomiHandler, 
     NHentaiHandler, 
     ZonaTMOHandler,
-    FakkuHandler
+    FakkuHandler,
+    ShadeMangaHandler
 )
 
 # Instantiate handlers (Stateless approach)
@@ -24,7 +25,8 @@ HANDLERS = [
     HitomiHandler(),
     NHentaiHandler(),
     ZonaTMOHandler(),
-    FakkuHandler()
+    FakkuHandler(),
+    ShadeMangaHandler()
 ]
 
 from urllib.parse import urlparse

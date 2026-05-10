@@ -107,9 +107,9 @@ class DownloaderApp:
             messagebox.showwarning("Aviso", "Por favor ingrese una URL.")
             return
 
-        supported_domains = ["tmohentai", "m440.in", "mangas.in", "hentai2read", "hitomi.la", "nhentai.net", "zonatmo.com", "fakku.cc"]
+        supported_domains = ["tmohentai", "m440.in", "mangas.in", "hentai2read", "hitomi.la", "nhentai.net", "zonatmo.com", "fakku.cc", "shademanga.com"]
         if not any(domain in url for domain in supported_domains):
-             messagebox.showwarning("Aviso", "URL no soportada.\nDominios válidos: tmohentai, m440.in, hentai2read, hitomi.la, nhentai.net, zonatmo, fakku.cc")
+             messagebox.showwarning("Aviso", "URL no soportada.\nDominios válidos: tmohentai, m440.in, hentai2read, hitomi.la, nhentai.net, zonatmo, fakku.cc, shademanga.com")
              return
              
         self.queue.append(url)
