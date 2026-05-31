@@ -93,8 +93,8 @@ class FakkuHandler(BaseSiteHandler):
                 html_content = await page.content()
                 total_pages = 0
                 
-                # Search for "1 / 167" pattern, strictly within tags to avoid aspect-[1/1] tailwind classes
-                pages_match = re.search(r'>\s*1\s*/\s*(\d+)\s*<', html_content)
+                # Search for "1 / 167" pattern
+                pages_match = re.search(r'1\s*/\s*(\d+)', html_content)
                 if pages_match:
                     total_pages = int(pages_match.group(1))
                 else:
