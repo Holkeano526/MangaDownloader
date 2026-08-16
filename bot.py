@@ -135,6 +135,7 @@ class DiscordLogAdapter:
 
 _gofile_token: Optional[str] = None
 _gofile_root: Optional[str] = None
+_gofile_public_folder: Optional[str] = None
 
 
 async def _ensure_gofile_account() -> bool:
@@ -155,12 +156,45 @@ async def _ensure_gofile_account() -> bool:
     return False
 
 
+async def _ensure_gofile_public_folder() -> Optional[str]:
+    """Ensures a public folder exists in the GoFile account and returns its id.
+
+    Files must live inside a *public* folder for their download page to be
+    shareable; by default content is private ("not publicly accessible").
+    """
+    global _gofile_public_folder
+    if _gofile_public_folder:
+        return _gofile_public_folder
+    if not await _ensure_gofile_account():
+        return None
+    try:
+        headers = {'Authorization': f'Bearer {_gofile_token}'}
+        async with aiohttp.ClientSession() as session:
+            payload = {
+                'parentFolderId': _gofile_root,
+                'folderName': 'manga',
+                'public': True,
+            }
+            async with session.post(
+                'https://api.gofile.io/contents/createFolder',
+                json=payload,
+                headers=headers,
+            ) as resp:
+                data = await resp.json()
+                if resp.status == 200 and data.get('status') == 'ok':
+                    _gofile_public_folder = data['data'].get('id')
+    except Exception as e:
+        print(f"[ERROR GOFILE] public folder: {e}")
+    return _gofile_public_folder
+
+
 async def upload_to_gofile(file_path: str) -> Optional[str]:
     """Uploads a file to GoFile and returns the download link."""
     try:
         if not await _ensure_gofile_account():
             return None
         headers = {'Authorization': f'Bearer {_gofile_token}'}
+        folder_id = await _ensure_gofile_public_folder() or _gofile_root
         async with aiohttp.ClientSession() as session:
             async with session.get('https://api.gofile.io/servers', headers=headers) as resp:
                 if resp.status != 200: return None
@@ -180,8 +214,8 @@ async def upload_to_gofile(file_path: str) -> Optional[str]:
             with open(file_path, 'rb') as f:
                 form_data = aiohttp.FormData(quote_fields=False)
                 form_data.add_field('file', f, filename=ascii_filename, content_type='application/pdf')
-                if _gofile_root:
-                    form_data.add_field('folderId', _gofile_root)
+                if folder_id:
+                    form_data.add_field('folderId', folder_id)
                 
                 async with session.post(upload_url, data=form_data, headers=headers) as upload_resp:
                     if upload_resp.status == 200:
