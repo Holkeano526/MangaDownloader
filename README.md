@@ -17,6 +17,10 @@ A powerful tool to automate manga downloads from popular sites and convert them 
 - **Connection Pooling**: Implements reusable `aiohttp` HTTP sessions with Keep-Alive to drastically reduce connection overhead.
 
 ### ⚡ Recent Updates (Latest Release)
+- **GoFile V2 API Support**: Upgraded the Discord bot to support GoFile's new required authentication. Automatically generates guest accounts, creates public folders for Discord shareability, and dynamically sanitizes Unicode characters to bypass internal GoFile `500` crashes.
+- **Optimized PDF Compilation**: Massively reduced generated PDF file sizes (fixing 1GB+ issues) by intelligently compressing raw image streams via optimal JPEG encoding without perceptible loss in manga quality.
+- **NAS & Docker Reliability**: Implemented `/health` endpoints in the FastAPI backend for robust container orchestration and automated restarts.
+- **RFC 5987 Unicode Support**: Fully supports downloading mangas with Japanese, Korean, and Chinese titles correctly through the web interface without HTTP header encode errors.
 - **Hentalk.pw Integration**: Added `HentalkHandler` supporting extremely fast SvelteKit JSON data extraction and Playwright Cloudflare bypass for high-quality downloads.
 - **Hitomi.la Batch Optimization & Stability**: Completely refactored `HitomiHandler` to extract image URLs in batch directly via Javascript injection, skipping slow page-by-page rendering. Implemented native Hitomi load-balancing support (`w1`, `w2`, etc.), intelligent retry mechanisms (Exponential Backoff), and reduced concurrent connections to prevent `503 Service Unavailable` bans and IP blocks.
 - **Dynamic Domain Loading**: Improved the legacy Tkinter app (`app.py`) to dynamically fetch and register supported domains directly from `core.handler.HANDLERS`, eliminating the need to update hardcoded lists when adding new sites.
