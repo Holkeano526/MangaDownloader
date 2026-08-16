@@ -27,6 +27,11 @@ core.config.OPEN_RESULT_ON_FINISH = False
 
 app = FastAPI()
 
+@app.get("/health")
+async def health():
+    """Healthcheck endpoint used by the container healthcheck."""
+    return {"status": "ok"}
+
 # [SEGURIDAD - OPEN SOURCE]
 # Mitigación de vulnerabilidad CORS (Cross-Origin Resource Sharing).
 # Evitar el uso de allow_origins=["*"] junto con allow_credentials=True, ya que 

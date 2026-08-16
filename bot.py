@@ -133,31 +133,60 @@ class DiscordLogAdapter:
         except discord.errors.HTTPException:
             pass 
 
+_gofile_token: Optional[str] = None
+_gofile_root: Optional[str] = None
+
+
+async def _ensure_gofile_account() -> bool:
+    """Creates/reuses a GoFile guest account token (the API now requires auth)."""
+    global _gofile_token, _gofile_root
+    if _gofile_token:
+        return True
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post('https://api.gofile.io/accounts', json={}) as resp:
+                data = await resp.json()
+                if resp.status == 200 and data.get('status') == 'ok':
+                    _gofile_token = data['data'].get('token')
+                    _gofile_root = data['data'].get('rootFolder')
+                    return bool(_gofile_token)
+    except Exception as e:
+        print(f"[ERROR GOFILE] account: {e}")
+    return False
+
+
 async def upload_to_gofile(file_path: str) -> Optional[str]:
     """Uploads a file to GoFile and returns the download link."""
     try:
+        if not await _ensure_gofile_account():
+            return None
+        headers = {'Authorization': f'Bearer {_gofile_token}'}
         async with aiohttp.ClientSession() as session:
-            async with session.get('https://api.gofile.io/servers') as resp:
+            async with session.get('https://api.gofile.io/servers', headers=headers) as resp:
                 if resp.status != 200: return None
                 data = await resp.json()
-                if data['status'] != 'ok': return None
+                if data.get('status') != 'ok': return None
                 
                 server = data['data']['servers'][0]['name']
                 upload_url = f'https://{server}.gofile.io/uploadFile'
             
             filename = os.path.basename(file_path)
             ascii_filename = filename.encode('ascii', 'ignore').decode('ascii').replace(" ", "_")
+            # Strip leading punctuation/underscores left by removed non-ASCII chars
+            ascii_filename = ascii_filename.lstrip('._- ')
             if not ascii_filename.replace("_", "").replace(".pdf", ""):
                 ascii_filename = "manga_download.pdf"
 
             with open(file_path, 'rb') as f:
                 form_data = aiohttp.FormData(quote_fields=False)
                 form_data.add_field('file', f, filename=ascii_filename, content_type='application/pdf')
+                if _gofile_root:
+                    form_data.add_field('folderId', _gofile_root)
                 
-                async with session.post(upload_url, data=form_data) as upload_resp:
+                async with session.post(upload_url, data=form_data, headers=headers) as upload_resp:
                     if upload_resp.status == 200:
                         res = await upload_resp.json()
-                        if res['status'] == 'ok':
+                        if res.get('status') == 'ok':
                             return res['data']['downloadPage']
     except Exception as e:
         print(f"[ERROR GOFILE] {e}")
