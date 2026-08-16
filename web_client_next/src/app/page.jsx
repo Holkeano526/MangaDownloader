@@ -165,7 +165,7 @@ export default function Home() {
                                     {item.status === 'completed' && item.filename && (
                                         <a 
                                             href={`/pdfs/${item.filename}`}
-                                            download
+                                            download={item.filename}
                                             className="px-4 py-2 rounded-lg bg-green-500/20 hover:bg-green-500/40 text-green-400 border border-green-500/30 transition-colors text-xs font-bold flex items-center shadow-[0_0_10px_rgba(34,197,94,0.2)] hover:shadow-[0_0_15px_rgba(34,197,94,0.4)]"
                                         >
                                             <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">

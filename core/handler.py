@@ -14,6 +14,7 @@ from .sites import (
     NHentaiHandler, 
     ZonaTMOHandler,
     FakkuHandler,
+    HentalkHandler,
     ShadeMangaHandler
 )
 
@@ -26,6 +27,7 @@ HANDLERS = [
     NHentaiHandler(),
     ZonaTMOHandler(),
     FakkuHandler(),
+    HentalkHandler(),
     ShadeMangaHandler()
 ]
 

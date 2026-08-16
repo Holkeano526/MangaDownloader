@@ -6,4 +6,5 @@ from .hitomi import HitomiHandler
 from .nhentai import NHentaiHandler
 from .zonatmo import ZonaTMOHandler
 from .fakku import FakkuHandler
+from .hentalk import HentalkHandler
 from .shademanga import ShadeMangaHandler

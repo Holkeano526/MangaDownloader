@@ -11,6 +11,7 @@ import os
 import sys
 import asyncio
 import logging
+import time
 import uuid
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
@@ -59,16 +60,28 @@ async def get_pdf(filename: str):
         print(f"SECURITY WARNING: Attempted path traversal for '{filename}'. Blocked.")
         return {"error": "Invalid file path requested."}
     
-    print(f"DEBUG: Request for PDF. Filename='{filename}'. Path='{target_path}'")
-    
+    try:
+        print(f"DEBUG: Request for PDF. Filename='{filename}'. Path='{target_path}'".encode('utf-8', 'replace').decode('cp1252', 'replace'))
+    except:
+        pass
+        
+
     if os.path.exists(target_path) and os.path.isfile(target_path):
         print("DEBUG: File found. Serving...")
+        from urllib.parse import quote
+        encoded_filename = quote(os.path.basename(filename))
         response = FileResponse(target_path, media_type="application/pdf")
-        response.headers["Content-Disposition"] = "inline"
+        response.headers["Content-Disposition"] = f"attachment; filename*=utf-8''{encoded_filename}"
         return response
     
     print("DEBUG: File NOT found.")
     return {"error": "File not found."}
+
+# --- Memory management constants ---
+# Maximum number of completed/cancelled/error items to keep in the queue history
+MAX_COMPLETED_ITEMS = 50
+# Maximum age (in seconds) for completed items before cleanup (1 hour)
+MAX_COMPLETED_AGE_SECONDS = 3600
 
 # Global Download Manager for Queue System
 class DownloadManager:
@@ -77,6 +90,22 @@ class DownloadManager:
         self.connections = []
         self.is_processing = False
         self.current_cancel_flag = False
+
+    def _cleanup_old_items(self):
+        """Removes old completed/cancelled/error items to prevent memory leaks."""
+        def is_recent(item):
+            ts = item.get("timestamp", 0)
+            return (time.time() - ts) < MAX_COMPLETED_AGE_SECONDS
+        
+        # Keep only active items + recent completed items (up to MAX_COMPLETED_ITEMS)
+        active = [i for i in self.queue if i["status"] in ("pending", "running")]
+        completed = [i for i in self.queue if i["status"] not in ("pending", "running")]
+        
+        # Filter recent + limit to MAX_COMPLETED_ITEMS
+        recent_completed = [i for i in completed if is_recent(i)]
+        recent_completed = recent_completed[-MAX_COMPLETED_ITEMS:]  # Keep last N
+        
+        self.queue = active + recent_completed
 
     async def broadcast(self):
         state = {"type": "queue_state", "queue": self.queue}
@@ -98,7 +127,8 @@ class DownloadManager:
             "progress": 0,
             "current": 0,
             "total": 100,
-            "logs": []
+            "logs": [],
+            "timestamp": time.time()
         })
         await self.broadcast()
         if not self.is_processing:
@@ -114,8 +144,11 @@ class DownloadManager:
             item = pending_items[0]
             item["status"] = "running"
             item["logs"].append("[INFO] Starting download...")
+            item["timestamp"] = time.time()
             self.current_cancel_flag = False
             await self.broadcast()
+
+            main_loop = asyncio.get_event_loop()
 
             def log_callback(msg):
                 item["logs"].append(msg)
@@ -125,11 +158,8 @@ class DownloadManager:
                     except: pass
                 
                 try:
-                    loop = asyncio.get_event_loop()
-                    if loop.is_running():
-                        loop.create_task(self.broadcast())
-                    else:
-                        asyncio.run(self.broadcast())
+                    if main_loop.is_running():
+                        main_loop.call_soon_threadsafe(lambda: main_loop.create_task(self.broadcast()))
                 except: pass
 
             def progress_callback(current, total):
@@ -153,7 +183,6 @@ class DownloadManager:
                     item["logs"].append(f"[INFO] Serie detectada. Añadiendo {len(result)} capítulos a la cola...")
                     
                     # Insert the new URLs right after the current one, or at the end
-                    import uuid
                     new_items = []
                     for u in result:
                         new_items.append({
@@ -165,7 +194,7 @@ class DownloadManager:
                             "total": 0,
                             "logs": [],
                             "filename": None,
-                            "timestamp": __import__("time").time()
+                            "timestamp": time.time()
                         })
                     self.queue.extend(new_items)
                     
@@ -178,6 +207,8 @@ class DownloadManager:
                 item["status"] = "error"
                 item["logs"].append(f"ERROR: {str(e)}")
             
+            item["timestamp"] = time.time()
+            self._cleanup_old_items()
             await self.broadcast()
         
         self.is_processing = False
@@ -187,9 +218,11 @@ class DownloadManager:
             if item["id"] == item_id:
                 if item["status"] == "pending":
                     item["status"] = "cancelled"
+                    item["timestamp"] = time.time()
                 elif item["status"] == "running":
                     self.current_cancel_flag = True
                     item["status"] = "cancelled"
+                    item["timestamp"] = time.time()
         await self.broadcast()
 
 manager = DownloadManager()

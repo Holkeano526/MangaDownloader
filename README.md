@@ -9,6 +9,19 @@ A powerful tool to automate manga downloads from popular sites and convert them 
 
 ## ✨ New Features & Technologies
 
+### 🚀 Performance & Stability (New)
+- **High-Concurrency Downloads**: Utilizes `asyncio.Semaphore` to parallelize image downloads without triggering rate limits (429 Too Many Requests).
+- **Thread-Safe UI & Background Tasks**: Resolves race conditions in the Tkinter Desktop app using Python's thread-safe `queue.Queue` and offloads CPU-bound PDF generation to `asyncio.to_thread`.
+- **Memory & Cache Optimization**: Prevents memory leaks in the FastAPI server by automatically pruning old WebSocket task history, and uses O(1) caching for rapid Discord Bot file lookups.
+- **Cross-Platform Readiness**: File handling and execution gracefully adapt to Windows, macOS, and Headless Linux environments (Docker).
+- **Connection Pooling**: Implements reusable `aiohttp` HTTP sessions with Keep-Alive to drastically reduce connection overhead.
+
+### ⚡ Recent Updates (Latest Release)
+- **Hentalk.pw Integration**: Added `HentalkHandler` supporting extremely fast SvelteKit JSON data extraction and Playwright Cloudflare bypass for high-quality downloads.
+- **Hitomi.la Batch Optimization & Stability**: Completely refactored `HitomiHandler` to extract image URLs in batch directly via Javascript injection, skipping slow page-by-page rendering. Implemented native Hitomi load-balancing support (`w1`, `w2`, etc.), intelligent retry mechanisms (Exponential Backoff), and reduced concurrent connections to prevent `503 Service Unavailable` bans and IP blocks.
+- **Dynamic Domain Loading**: Improved the legacy Tkinter app (`app.py`) to dynamically fetch and register supported domains directly from `core.handler.HANDLERS`, eliminating the need to update hardcoded lists when adding new sites.
+- **Extensibility Guide**: Created `HOW_TO_ADD_SITES.md` documenting best practices for AI agents and developers adding new web scrapers using Playwright and Crawl4AI.
+
 ### 🏗️ Architecture
 -   **Modular Core**: Completely refactored `core` package using the Strategy Pattern for easy extension.
 -   **Asynchronous I/O**: Built on `asyncio` and `aiohttp` for high-performance concurrent downloads.
@@ -34,7 +47,8 @@ A powerful tool to automate manga downloads from popular sites and convert them 
 | **TMO-H** | AI Extraction | **Crawl4AI** | Intelligent image detection. |
 | **M440** | Crawler | **Crawl4AI** | Supports covers and chapters. |
 | **H2R**| JSON Parsing | **AsyncIO** | Fast metadata extraction. |
-| **Hi.la** | Stealth Browser | **Playwright** | Bypasses 404/403 protection. |
+| **Hentalk.pw** | SvelteKit JSON | **Playwright** | Bypasses Cloudflare & parses native JSON. |
+| **Hi.la** | Batch JS Injection| **Playwright** | Fast URL extraction + Load Balancing + Retry logic. |
 | **NH.net**| API + Browser | **Playwright** | Bypasses Cloudflare. |
 
 ---
@@ -83,6 +97,15 @@ python bot.py
 ```
 *   **Command:** `!descargar <url>`
 *   Files >8MB are automatically uploaded to **GoFile**.
+
+---
+
+## 🧩 Extensibility (Adding New Sites)
+MangaDownloader is designed to be easily extensible using the Strategy Pattern. To add support for a new website:
+1. Create a new handler class inheriting from `BaseSiteHandler` in `core/sites/`.
+2. Implement `get_supported_domains()` and the `process()` logic.
+3. Register the handler in the `HANDLERS` list within `core/handler.py`.
+> For detailed instructions on how an AI or Developer should analyze the DOM and build a new module, refer to the [HOW_TO_ADD_SITES.md](HOW_TO_ADD_SITES.md) guide.
 
 ---
 

@@ -8,6 +8,8 @@ import re
 import shutil
 import asyncio
 import aiohttp
+import subprocess
+import sys
 import uuid
 from typing import List, Optional, Callable
 from PIL import Image
@@ -17,6 +19,60 @@ except ImportError:
     img2pdf = None
 
 from .config import PDF_FOLDER_NAME, TEMP_FOLDER_NAME, BATCH_SIZE
+
+# --- Reusable HTTP Session (Keep-Alive, Connection Pooling) ---
+# A dictionary to hold named sessions for different components (web, bot, etc.)
+_http_sessions: dict = {}
+_session_lock: asyncio.Lock = None
+
+
+def _get_session_lock() -> asyncio.Lock:
+    """Lazily create the asyncio Lock for session management."""
+    global _session_lock
+    if _session_lock is None:
+        _session_lock = asyncio.Lock()
+    return _session_lock
+
+
+async def get_http_session(name: str = "default", headers: Optional[dict] = None) -> aiohttp.ClientSession:
+    """
+    Returns a reusable aiohttp.ClientSession for the given name.
+    Creates one if it doesn't exist. Sessions use keep-alive and connection pooling.
+    
+    Args:
+        name: A namespace for the session (e.g. 'default', 'bot', 'web').
+        headers: Default headers for this session.
+    
+    Returns:
+        An aiohttp.ClientSession instance.
+    """
+    lock = _get_session_lock()
+    async with lock:
+        if name not in _http_sessions or _http_sessions[name].closed:
+            connector = aiohttp.TCPConnector(
+                limit=50,           # Max total connections
+                limit_per_host=20,  # Max connections per host
+                ttl_dns_cache=300,  # DNS cache TTL (5 min)
+                force_close=False,  # Use keep-alive
+            )
+            timeout = aiohttp.ClientTimeout(total=60, connect=15, sock_read=30)
+            session_headers = headers or {}
+            _http_sessions[name] = aiohttp.ClientSession(
+                connector=connector,
+                timeout=timeout,
+                headers=session_headers,
+            )
+        return _http_sessions[name]
+
+
+async def close_http_sessions():
+    """Gracefully close all reusable HTTP sessions."""
+    lock = _get_session_lock()
+    async with lock:
+        for name, session in list(_http_sessions.items()):
+            if not session.closed:
+                await session.close()
+        _http_sessions.clear()
 
 def clean_filename(text: str) -> str:
     """
@@ -34,7 +90,7 @@ def clean_filename(text: str) -> str:
     safe = re.sub(r'[\\/*?:"<>|]', "", text).strip()
     return safe if safe else "untitled"
 
-async def download_image(session: aiohttp.ClientSession, url: str, folder: str, index: int, log_callback: Callable[[str], None], headers: dict) -> Optional[str]:
+async def download_image(session: aiohttp.ClientSession, url: str, folder: str, index: int, log_callback: Callable[[str], None], headers: Optional[dict] = None) -> Optional[str]:
     """
     Downloads a single image asynchronously and saves it to a persistent local path.
     
@@ -85,11 +141,16 @@ def create_pdf(image_paths: List[str], output_pdf: str, log_callback: Callable[[
         for path in image_paths:
             try:
                 with Image.open(path) as img:
-                    if img.mode in ("RGBA", "LA") or (img.mode == "P" and "transparency" in img.info):
-                        head, tail = os.path.split(path)
-                        new_filename = os.path.splitext(tail)[0] + "_converted.jpg"
-                        new_path = os.path.join(head, new_filename)
-                        img.convert("RGB").save(new_path, "JPEG", quality=90)
+                    ext_lower = os.path.splitext(path)[1].lower()
+                    needs_conversion = (
+                        img.mode in ("RGBA", "LA") or 
+                        (img.mode == "P" and "transparency" in img.info) or
+                        ext_lower not in (".jpg", ".jpeg", ".png")
+                    )
+                    
+                    if needs_conversion:
+                        new_path = f"{os.path.splitext(path)[0]}_converted.jpg"
+                        img.convert("RGB").save(new_path, "JPEG", quality=70)
                         final_paths.append(new_path)
                     else:
                         final_paths.append(path)
@@ -137,6 +198,28 @@ def create_pdf(image_paths: List[str], output_pdf: str, log_callback: Callable[[
         
         return False
 
+def _open_file_or_folder(file_path: str):
+    """
+    Opens a file or its containing folder, with multiplatform support.
+    Falls back gracefully on headless environments (Docker, Linux servers).
+    """
+    try:
+        if sys.platform == "win32":
+            os.startfile(os.path.dirname(file_path))
+            os.startfile(file_path)
+        elif sys.platform == "darwin":  # macOS
+            subprocess.call(["open", os.path.dirname(file_path)])
+            subprocess.call(["open", file_path])
+        else:  # Linux and others
+            # In Docker/headless Linux, xdg-open might fail - we gracefully ignore
+            try:
+                subprocess.call(["xdg-open", file_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            except (FileNotFoundError, OSError):
+                pass  # Headless environment, cannot open files
+    except Exception:
+        pass  # Never crash on file-opening failure
+
+
 def finalize_pdf_flow(image_paths: List[str], pdf_name: str, log_callback: Callable[[str], None], 
                       temp_dir: Optional[str] = None, open_result: bool = True):
     """
@@ -152,10 +235,37 @@ def finalize_pdf_flow(image_paths: List[str], pdf_name: str, log_callback: Calla
     if create_pdf(image_paths, output_pdf, log_callback):
         if open_result:
             if os.path.exists(output_pdf):
-                try: os.startfile(os.path.dirname(output_pdf))
-                except: pass
-                try: os.startfile(output_pdf)
-                except: pass
+                _open_file_or_folder(output_pdf)
+        log_callback("[DONE] Finished.")
+    else:
+        log_callback("[ERROR] Could not create PDF.")
+
+    if temp_dir and os.path.exists(temp_dir):
+        try:
+            shutil.rmtree(temp_dir)
+        except: pass
+
+
+async def async_finalize_pdf_flow(image_paths: List[str], pdf_name: str, log_callback: Callable[[str], None], 
+                                   temp_dir: Optional[str] = None, open_result: bool = True):
+    """
+    Async version of finalize_pdf_flow. Runs CPU-bound create_pdf in a thread
+    to avoid blocking the event loop, then opens the file and cleans up.
+    """
+    project_root = os.getcwd() 
+    pdf_dir = os.path.join(project_root, PDF_FOLDER_NAME)
+    os.makedirs(pdf_dir, exist_ok=True)
+    
+    output_pdf = os.path.join(pdf_dir, pdf_name)
+    log_callback(f"[INFO] Generating PDF: {pdf_name}")
+    
+    # Run CPU-bound PDF creation in a separate thread
+    success = await asyncio.to_thread(create_pdf, image_paths, output_pdf, log_callback)
+    
+    if success:
+        if open_result:
+            if os.path.exists(output_pdf):
+                _open_file_or_folder(output_pdf)
         log_callback("[DONE] Finished.")
     else:
         log_callback("[ERROR] Could not create PDF.")
@@ -194,7 +304,7 @@ async def download_and_make_pdf(image_urls: List[str], output_name: str, headers
                 log_callback("[INFO] Process cancelled by user.")
                 break
             chunk = image_urls[i:i+chunk_size]
-            tasks = [download_image(session, u, temp_folder, i + idx + 1, log_callback, headers) for idx, u in enumerate(chunk)]
+            tasks = [download_image(session, u, temp_folder, i + idx + 1, log_callback) for idx, u in enumerate(chunk)]
             res = await asyncio.gather(*tasks)
             results.extend(res)
             
@@ -208,10 +318,9 @@ async def download_and_make_pdf(image_urls: List[str], output_name: str, headers
     if files:
         if is_path:
             # Special case where output_name is a full path (e.g. m440 chapter)
-            if create_pdf(files, output_name, log_callback):
-                pass
+            success = await asyncio.to_thread(create_pdf, files, output_name, log_callback)
         else:
-            finalize_pdf_flow(files, output_name, log_callback, temp_folder, open_result=open_result)
+            await async_finalize_pdf_flow(files, output_name, log_callback, temp_folder, open_result=open_result)
             return
 
     if os.path.exists(temp_folder): shutil.rmtree(temp_folder)

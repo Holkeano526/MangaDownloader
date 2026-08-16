@@ -12,7 +12,7 @@ import os
 import asyncio
 import re
 import aiohttp
-from typing import Optional
+from typing import Optional, Dict
 from dotenv import load_dotenv
 
 import core
@@ -29,13 +29,47 @@ intents.message_content = True
 
 bot = commands.Bot(command_prefix='!', intents=intents)
 
-# Global lock to serialize downloads and prevent high RAM usage
-download_lock = asyncio.Lock()
+# Semaphore to allow up to 3 concurrent downloads (instead of a global Lock)
+download_semaphore = asyncio.Semaphore(3)
+
+# PDF file index cache: maps filename -> full path for O(1) lookup
+# Built lazily and refreshed on cache miss
+_pdf_index_cache: Dict[str, str] = {}
+_pdf_index_built = False
+
+
+def _build_pdf_index():
+    """Builds a filename->fullpath index of the PDF folder for O(1) lookups."""
+    global _pdf_index_cache, _pdf_index_built
+    current_dir = os.getcwd()
+    pdf_root = os.path.join(current_dir, core.config.PDF_FOLDER_NAME)
+    _pdf_index_cache.clear()
+    if os.path.exists(pdf_root):
+        for root, dirs, files in os.walk(pdf_root):
+            for fname in files:
+                _pdf_index_cache[fname] = os.path.join(root, fname)
+    _pdf_index_built = True
+
+
+def _find_pdf_fast(filename: str) -> Optional[str]:
+    """O(1) lookup for a PDF file in the PDF directory. Rebuilds index on cache miss."""
+    global _pdf_index_cache, _pdf_index_built
+    if not _pdf_index_built:
+        _build_pdf_index()
+    
+    result = _pdf_index_cache.get(filename)
+    if result and os.path.exists(result):
+        return result
+    
+    # Cache miss or stale entry: rebuild and retry
+    _build_pdf_index()
+    return _pdf_index_cache.get(filename)
 
 class DiscordLogAdapter:
     """
     Redirects core logs to an editable Discord message.
     Automatically detects generated PDFs for upload.
+    Uses O(1) indexed lookup instead of recursive os.walk.
     """
     def __init__(self, ctx):
         self.ctx = ctx
@@ -62,34 +96,19 @@ class DiscordLogAdapter:
         match = re.search(r"\[SUCCESS\] PDF Generated: (.*)", text)
         if match:
             filename = match.group(1).strip()
-            # Use CWD for PDF folder resolution as utils writes to CWD/PDF
-            current_dir = os.getcwd() 
             
             if os.path.isabs(filename) and os.path.exists(filename):
                 self.generated_files.append(filename)
                 print(f"[BOT FILE DETECTED ABS] {filename}")
             else:
-                pdf_root = os.path.join(current_dir, core.config.PDF_FOLDER_NAME)
-                found = False
-                
-                direct_path = os.path.join(pdf_root, filename)
-                if os.path.exists(direct_path):
-                    self.generated_files.append(direct_path)
-                    print(f"[BOT FILE DETECTED DIR] {direct_path}")
-                    found = True
-                
-                if not found:
-                    for root, dirs, files in os.walk(pdf_root):
-                        if filename in files:
-                            full_path = os.path.join(root, filename)
-                            self.generated_files.append(full_path)
-                            print(f"[BOT FILE DETECTED REC] {full_path}")
-                            found = True
-                            
-                if not found:
-                     if os.path.exists(filename):
-                         self.generated_files.append(filename)
-                         print(f"[BOT FILE DETECTED LOCAL] {filename}")
+                # O(1) indexed lookup instead of recursive os.walk
+                result = _find_pdf_fast(filename)
+                if result:
+                    self.generated_files.append(result)
+                    print(f"[BOT FILE DETECTED INDEX] {result}")
+                elif os.path.exists(filename):
+                    self.generated_files.append(filename)
+                    print(f"[BOT FILE DETECTED LOCAL] {filename}")
 
         import time
         current_time = time.time()
@@ -127,9 +146,11 @@ async def upload_to_gofile(file_path: str) -> Optional[str]:
                 upload_url = f'https://{server}.gofile.io/uploadFile'
             
             filename = os.path.basename(file_path)
+            from urllib.parse import quote
+            safe_filename = quote(filename)
             with open(file_path, 'rb') as f:
-                form_data = aiohttp.FormData()
-                form_data.add_field('file', f, filename=filename, content_type='application/pdf')
+                form_data = aiohttp.FormData(quote_fields=False)
+                form_data.add_field('file', f, filename=safe_filename, content_type='application/pdf')
                 
                 async with session.post(upload_url, data=form_data) as upload_resp:
                     if upload_resp.status == 200:
@@ -163,9 +184,12 @@ async def descargar(ctx, url: str):
     def progress_adapter(current, total): pass
 
     try:
-        # Prevent concurrent downloads using the global lock
-        await ctx.send("⏳ Solicitud recibida. Esperando en cola..." if download_lock.locked() else "⏳ Iniciando descarga...")
-        async with download_lock:
+        # Use semaphore to allow up to 3 concurrent downloads
+        if download_semaphore.locked():
+            await ctx.send("⏳ Solicitud recibida. Esperando en cola...")
+        else:
+            await ctx.send("⏳ Iniciando descarga...")
+        async with download_semaphore:
             result = await core.process_entry(
                 url, 
                 logger.log_callback, 
@@ -177,7 +201,7 @@ async def descargar(ctx, url: str):
             await ctx.send(f"📚 **Serie detectada**. Se encontraron **{len(result)} capítulos**. Añadiéndolos a la cola...")
             for sub_url in result:
                 # Disparamos cada capítulo como una solicitud individual
-                # Esto creará un mensaje de Discord para cada uno y respetará el lock global.
+                # Esto creará un mensaje de Discord para cada uno y respetará el semaphore global.
                 bot.loop.create_task(ctx.invoke(descargar, url=sub_url))
             return
         

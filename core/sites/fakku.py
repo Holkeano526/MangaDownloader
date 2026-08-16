@@ -1,16 +1,21 @@
 """
 Fakku.cc (Faccina) site handler.
 """
+import asyncio
 import os
 import re
 import shutil
+import sys
 import uuid
 from typing import Callable, Optional
 from playwright.async_api import async_playwright
 
 from .base import BaseSiteHandler
 from .. import config
-from ..utils import finalize_pdf_flow, clean_filename
+from ..utils import clean_filename
+
+# Semáforo para limitar descargas concurrentes y evitar 429 (Too Many Requests)
+DOWNLOAD_SEMAPHORE = asyncio.Semaphore(5)
 
 
 class FakkuHandler(BaseSiteHandler):
@@ -29,7 +34,7 @@ class FakkuHandler(BaseSiteHandler):
     ) -> None:
         """
         Download images from Fakku.cc using Playwright to extract total pages
-        and image hashes, then downloading them directly.
+        and image hashes, then downloading them in parallel with a semaphore.
         """
         id_match = re.search(r'/g/(\d+)', url)
         if not id_match:
@@ -89,74 +94,103 @@ class FakkuHandler(BaseSiteHandler):
                     title = clean_title if clean_title else title
                 log_callback(f"[INFO] Detected Manga Title: {title}")
                 
-                # Extract total pages
-                html_content = await page.content()
+                # --- Extract total pages using Playwright DOM (preferred) with regex fallback ---
                 total_pages = 0
+                try:
+                    # Intentar ubicar el contador de páginas vía selector de Playwright
+                    page_counter = page.locator("text=/\\d+\\s*/\\s*\\d+/").first
+                    counter_text = await page_counter.inner_text()
+                    parts = counter_text.split('/')
+                    if len(parts) == 2:
+                        total_pages = int(parts[1].strip())
+                        log_callback(f"[INFO] Total pages extracted via DOM: {total_pages}")
+                except Exception:
+                    log_callback("[WARN] DOM page counter not found. Falling back to regex...")
                 
-                # Search for "1 / 167" pattern, strictly within tags to avoid aspect-[1/1] tailwind classes
-                pages_match = re.search(r'>\s*1\s*/\s*(\d+)\s*<', html_content)
-                if pages_match:
-                    total_pages = int(pages_match.group(1))
-                else:
-                    log_callback("[ERROR] Could not determine total pages from DOM.")
-                    return
+                if not total_pages:
+                    # Fallback: regex sobre el HTML (legado)
+                    html_content = await page.content()
+                    pages_match = re.search(r'>\s*1\s*/\s*(\d+)\s*<', html_content)
+                    if pages_match:
+                        total_pages = int(pages_match.group(1))
+                        log_callback(f"[INFO] Total pages extracted via regex fallback: {total_pages}")
+                    else:
+                        log_callback("[ERROR] Could not determine total pages from DOM or regex. Possible site layout change.")
+                        return
                 
                 log_callback(f"[INFO] Total pages: {total_pages}")
                 
-                # Extract image base hash
-                # Example: src="/image/44274e2779652ba8/1?type=5cfead81"
-                img_src_match = re.search(r'src=["\'](/image/[a-fA-F0-9]+)/1\?', html_content)
-                if not img_src_match:
-                    img_src_match = re.search(r'src=["\'](/image/[a-fA-F0-9]+)/1["\']', html_content)
-
-                if not img_src_match:
-                    log_callback("[ERROR] Could not extract image base hash. Page format changed?")
-                    return
-                    
-                base_img_path = img_src_match.group(1) # e.g. "/image/44274e2779652ba8"
-                log_callback(f"[INFO] Image base extracted: {base_img_path}")
+                # --- Extract image base hash using Playwright DOM (preferred) with regex fallback ---
+                base_img_path = None
+                try:
+                    img_element = page.locator("img[src*='/image/']").first
+                    img_src = await img_element.get_attribute("src")
+                    if img_src:
+                        # Ejemplo: "/image/44274e2779652ba8/1?type=5cfead81" o "/image/44274e2779652ba8/1"
+                        hash_match = re.search(r'(/image/[a-fA-F0-9]+)/', img_src)
+                        if hash_match:
+                            base_img_path = hash_match.group(1)
+                            log_callback(f"[INFO] Image base extracted via DOM: {base_img_path}")
+                except Exception:
+                    log_callback("[WARN] DOM image selector failed. Falling back to regex...")
                 
-                # Download loop
-                for i in range(1, total_pages + 1):
-                    if check_cancel():
-                        log_callback("[WARN] Process cancelled by user.")
-                        break
-
-                    try:
-                        img_url = f"https://fakku.cc{base_img_path}/{i}"
-                        log_callback(f"[DEBUG] Fetching page {i}: {img_url}")
-                        
-                        response = await page.request.get(img_url, headers={"Referer": reader_url})
-                        
-                        if response.status == 200:
-                            data = await response.body()
-                            ext = "jpg" # Faccina usually returns images without extension in URL
+                if not base_img_path:
+                    # Fallback: regex sobre el HTML (legado)
+                    html_content = await page.content()
+                    img_src_match = re.search(r'src=["\'](/image/[a-fA-F0-9]+)/1\?', html_content)
+                    if not img_src_match:
+                        img_src_match = re.search(r'src=["\'](/image/[a-fA-F0-9]+)/1["\']', html_content)
+                    if img_src_match:
+                        base_img_path = img_src_match.group(1)
+                        log_callback(f"[INFO] Image base extracted via regex fallback: {base_img_path}")
+                    else:
+                        log_callback("[ERROR] Could not extract image base hash. Page format changed?")
+                        return
+                
+                # --- Parallel download with Semaphore (max 5 concurrent requests) ---
+                completed_count = [0]  # mutable counter for progress tracking
+                
+                async def download_page(i: int) -> Optional[str]:
+                    async with DOWNLOAD_SEMAPHORE:
+                        if check_cancel():
+                            return None
+                        try:
+                            img_url = f"https://fakku.cc{base_img_path}/{i}"
+                            response = await page.request.get(img_url, headers={"Referer": reader_url})
                             
-                            # Deduce extension from content-type if available
-                            ct = response.headers.get("content-type", "")
-                            if "png" in ct: ext = "png"
-                            elif "webp" in ct: ext = "webp"
-                            elif "gif" in ct: ext = "gif"
-                            
-                            filename = f"{i:03d}.{ext}"
-                            filepath = os.path.join(temp_dir, filename)
-                            
-                            with open(filepath, 'wb') as f:
-                                f.write(data)
-                            
-                            download_targets.append(filepath)
-                            
-                            if progress_callback:
-                                progress_callback(i, total_pages)
-                        else:
-                            log_callback(f"[ERROR] Page {i} failed with status {response.status}")
-                        
-                        # Be gentle with the server
-                        await page.wait_for_timeout(200)
-                        
-                    except Exception as e:
-                        log_callback(f"[ERROR] Error downloading page {i}: {e}")
-
+                            if response.status == 200:
+                                data = await response.body()
+                                ext = "jpg"
+                                ct = response.headers.get("content-type", "")
+                                if "png" in ct: ext = "png"
+                                elif "webp" in ct: ext = "webp"
+                                elif "gif" in ct: ext = "gif"
+                                
+                                filename = f"{i:03d}.{ext}"
+                                filepath = os.path.join(temp_dir, filename)
+                                
+                                # Write file using asyncio.to_thread to avoid blocking event loop
+                                def _write_file():
+                                    with open(filepath, 'wb') as f:
+                                        f.write(data)
+                                await asyncio.to_thread(_write_file)
+                                
+                                completed_count[0] += 1
+                                if progress_callback:
+                                    progress_callback(completed_count[0], total_pages)
+                                return filepath
+                            else:
+                                log_callback(f"[ERROR] Page {i} failed with status {response.status}")
+                                return None
+                        except Exception as e:
+                            log_callback(f"[ERROR] Error downloading page {i}: {e}")
+                            return None
+                
+                # Create all download tasks and run them concurrently
+                tasks = [download_page(i) for i in range(1, total_pages + 1)]
+                results = await asyncio.gather(*tasks)
+                download_targets = [r for r in results if r is not None]
+                
                 log_callback(f"\n[INFO] Download finished. {len(download_targets)} images retrieved.")
                 
             except Exception as e:
@@ -164,10 +198,11 @@ class FakkuHandler(BaseSiteHandler):
             finally:
                 await browser.close()
 
-        # Generate PDF via Shared Utils
+        # Generate PDF via Shared Utils (async version to not block event loop)
         if download_targets:
+            from ..utils import async_finalize_pdf_flow
             pdf_name = f"{clean_filename(title)}.pdf"
-            finalize_pdf_flow(
+            await async_finalize_pdf_flow(
                 download_targets, 
                 pdf_name, 
                 log_callback, 

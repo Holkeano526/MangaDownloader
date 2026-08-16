@@ -9,6 +9,7 @@ import tkinter as tk
 from tkinter import ttk, scrolledtext, messagebox
 import threading
 import asyncio
+import queue
 import core 
 import core.config
 
@@ -16,8 +17,10 @@ class DownloaderApp:
     def __init__(self, root: tk.Tk):
         self.root = root
         self.cancelled = False
-        self.queue = []
+        self.queue = queue.Queue()  # Thread-safe queue (fixes race conditions)
+        self.queue_lock = threading.Lock()  # Protects shared mutable state
         self.is_processing = False
+        self._queue_display = []  # Snapshot for UI display (only modified from main thread)
         self.root.title("Universal Manga Downloader")
         self.root.geometry("800x700")
         
@@ -95,8 +98,9 @@ class DownloaderApp:
         except: pass
 
     def update_queue_ui(self):
+        """Update the queue Listbox from the thread-safe _queue_display snapshot."""
         self.queue_list.delete(0, tk.END)
-        for i, item in enumerate(self.queue):
+        for i, item in enumerate(self._queue_display):
             status = "Procesando" if (i == 0 and self.is_processing) else "Pendiente"
             self.queue_list.insert(tk.END, f"[{status}] {item}")
 
@@ -106,19 +110,38 @@ class DownloaderApp:
             messagebox.showwarning("Aviso", "Por favor ingrese una URL.")
             return
 
-        supported_domains = ["tmohentai", "m440.in", "mangas.in", "hentai2read", "hitomi.la", "nhentai.net", "zonatmo.com", "fakku.cc", "shademanga.com"]
+        from core.handler import HANDLERS
+        supported_domains = []
+        for h in HANDLERS:
+            supported_domains.extend(h.get_supported_domains())
+            
         if not any(domain in url for domain in supported_domains):
-             messagebox.showwarning("Aviso", "URL no soportada.\nDominios válidos: tmohentai, m440.in, hentai2read, hitomi.la, nhentai.net, zonatmo, fakku.cc, shademanga.com")
+             domains_str = ", ".join(supported_domains)
+             messagebox.showwarning("Aviso", f"URL no soportada.\nDominios válidos: {domains_str}")
              return
-             
-        self.queue.append(url)
-        self.update_queue_ui()
+              
+        self.queue.put(url)
+        self.refresh_queue_display()
         self.url_entry.delete(0, tk.END)
         self.url_entry.insert(0, self.placeholder_text)
         self.url_entry.config(foreground='grey')
         
         if not self.is_processing:
             threading.Thread(target=self.process_queue, daemon=True).start()
+
+    def refresh_queue_display(self):
+        """Thread-safe: updates _queue_display snapshot from queue.Queue contents."""
+        with self.queue_lock:
+            # Rebuild _queue_display from the Queue (consumes items, then puts them back)
+            temp = []
+            while not self.queue.empty():
+                try:
+                    temp.append(self.queue.get_nowait())
+                except queue.Empty:
+                    break
+            for item in temp:
+                self.queue.put(item)
+            self._queue_display = temp
 
     def process_queue(self) -> None:
         self.is_processing = True
@@ -129,11 +152,15 @@ class DownloaderApp:
                 f.write("=== LOG START ===\n")
         except Exception as e:
             print(f"Error writing log: {e}")
+        
+        while True:
+            try:
+                url = self.queue.get_nowait()
+            except queue.Empty:
+                break
             
-        while self.queue:
-            url = self.queue[0]
             self.cancelled = False
-            
+            self.root.after(0, lambda u=url: self._queue_display.remove(u) if u in self._queue_display else None)
             self.root.after(0, self.update_queue_ui)
             self.root.after(0, lambda: self.btn_cancel.config(state='normal'))
             self.root.after(0, lambda: self.progress.config(value=0))
@@ -143,13 +170,21 @@ class DownloaderApp:
             
             result = self.run_async_blocking(url)
             
-            if self.queue:
-                self.queue.pop(0)
-                
             if isinstance(result, list):
-                self.root.after(0, lambda: self.log(f"\n[INFO] Serie detectada. Añadiendo {len(result)} capítulos a la cola.\n"))
-                self.queue = result + self.queue
+                self.root.after(0, lambda r=result: self.log(f"\n[INFO] Serie detectada. Añadiendo {len(r)} capítulos a la cola.\n"))
+                # Insert sub-urls at the front (reverse order so first ends up first)
+                for sub_url in reversed(result):
+                    # Put back at front by using a temp list
+                    temp = [sub_url]
+                    while not self.queue.empty():
+                        try:
+                            temp.append(self.queue.get_nowait())
+                        except queue.Empty:
+                            break
+                    for item in temp:
+                        self.queue.put(item)
             
+            self.root.after(0, self.refresh_queue_display)
             self.root.after(0, self.update_queue_ui)
             
         self.is_processing = False
