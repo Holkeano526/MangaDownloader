@@ -14,9 +14,12 @@ async def test_gofile():
             
         form_data = aiohttp.FormData(quote_fields=False)
         filename = "みちゆくはな作品集 かけら。 Hitomi.la.pdf"
-        
+        ascii_filename = filename.encode('ascii', 'ignore').decode('ascii').replace(" ", "_")
+        if not ascii_filename.replace("_", "").replace(".pdf", ""):
+            ascii_filename = "manga_download.pdf"
+            
         with open('test_upload.pdf', 'rb') as f:
-            form_data.add_field('file', f, filename=filename, content_type='application/pdf')
+            form_data.add_field('file', f, filename=ascii_filename, content_type='application/pdf')
             async with session.post(upload_url, data=form_data) as upload_resp:
                 res = await upload_resp.json()
                 print(str(res).encode('utf-8'))

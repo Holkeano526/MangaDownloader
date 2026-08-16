@@ -146,11 +146,13 @@ async def upload_to_gofile(file_path: str) -> Optional[str]:
                 upload_url = f'https://{server}.gofile.io/uploadFile'
             
             filename = os.path.basename(file_path)
-            from urllib.parse import quote
-            safe_filename = quote(filename)
+            ascii_filename = filename.encode('ascii', 'ignore').decode('ascii').replace(" ", "_")
+            if not ascii_filename.replace("_", "").replace(".pdf", ""):
+                ascii_filename = "manga_download.pdf"
+
             with open(file_path, 'rb') as f:
                 form_data = aiohttp.FormData(quote_fields=False)
-                form_data.add_field('file', f, filename=safe_filename, content_type='application/pdf')
+                form_data.add_field('file', f, filename=ascii_filename, content_type='application/pdf')
                 
                 async with session.post(upload_url, data=form_data) as upload_resp:
                     if upload_resp.status == 200:
