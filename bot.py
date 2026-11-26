@@ -30,6 +30,7 @@ import core
 import core.config
 import mangascan_client
 from core import busqueda
+from core import agrupador
 
 load_dotenv()
 TOKEN = os.getenv('DISCORD_TOKEN')
@@ -704,10 +705,114 @@ def _titulo_para_series(titulo: str) -> str:
     return partes[0] if partes else t.strip()
 
 
+def _fuente(r) -> str:
+    """'🇪🇸 [lectorhentai](url)' para la lista de fuentes de una parte."""
+    return f"{busqueda.BANDERA.get(r.idioma, '🏳️')} [{r.sitio}]({r.url})"
+
+
+def _embed_serie(serie, n_serie: int, actual_url: str = ""):
+    embed = discord.Embed(title=f"📚 {serie.nombre}"[:256], color=discord.Color.teal())
+    if serie.artista:
+        embed.description = f"✍️ {serie.artista[:200]}"
+    for parte in serie.partes[:24]:
+        marca = " ✅ *(la que descargaste)*" if actual_url and any(r.url == actual_url for r in parte.resultados) else ""
+        fuentes = " · ".join(_fuente(r) for r in parte.resultados[:6])
+        if len(parte.resultados) > 6:
+            fuentes += f" · +{len(parte.resultados) - 6}"
+        embed.add_field(name=f"Parte {parte.nombre}{marca}"[:256],
+                        value=(fuentes or "—")[:1024], inline=False)
+    return embed
+
+
+class SeriesView(discord.ui.View):
+    """Series agrupadas: menú para descargar una parte (mejor fuente primero: español, inglés...)
+    y botón para ver la lista completa de resultados paginada."""
+
+    def __init__(self, ctx, texto: str, series, todos, segundos: float, actual_url: str = ""):
+        super().__init__(timeout=1800)
+        self.ctx, self.texto, self.series, self.todos, self.segundos = ctx, texto, series, todos, segundos
+        opciones, self.mapa = [], []
+        for si, serie in enumerate(series):
+            for parte in serie.partes:
+                # Hasta 3 fuentes por parte (ya vienen ordenadas por idioma)
+                for r in parte.resultados[:3]:
+                    if len(opciones) >= 25 or (actual_url and r.url == actual_url):
+                        continue
+                    self.mapa.append(r)
+                    opciones.append(discord.SelectOption(
+                        label=f"{serie.nombre[:60]} · Parte {parte.nombre}"[:100],
+                        description=f"{r.sitio} · {r.titulo}"[:100],
+                        emoji=busqueda.BANDERA.get(r.idioma, "🏳️"),
+                        value=str(len(self.mapa) - 1)))
+        if opciones:
+            menu = discord.ui.Select(placeholder="Descargar una parte", options=opciones, row=0)
+            menu.callback = self._elegido
+            self.add_item(menu)
+        if todos:
+            boton = discord.ui.Button(label=f"📋 Ver todos los resultados ({len(todos)})",
+                                      style=discord.ButtonStyle.secondary, row=1)
+            boton.callback = self._ver_todos
+            self.add_item(boton)
+
+    def _permitido(self, interaction) -> bool:
+        permisos = getattr(interaction.user, "guild_permissions", None)
+        return interaction.user.id == self.ctx.author.id or bool(permisos and permisos.manage_messages)
+
+    async def _elegido(self, interaction: discord.Interaction):
+        if not self._permitido(interaction):
+            await interaction.response.send_message("Usa tu propio !buscar para descargar.", ephemeral=True)
+            return
+        r = self.mapa[int(interaction.data["values"][0])]
+        await interaction.response.send_message(f"📥 Descargando **{r.titulo[:150]}** de `{r.sitio}`...")
+        bot.loop.create_task(self.ctx.invoke(descargar, url=r.url))
+
+    async def _ver_todos(self, interaction: discord.Interaction):
+        if not self._permitido(interaction):
+            await interaction.response.send_message("Usa tu propio !buscar.", ephemeral=True)
+            return
+        await interaction.response.defer()
+        vista = ResultadosPaginadosView(self.ctx, self.texto, busqueda.ordenar_por_idioma(self.todos), self.segundos)
+        contenido, tarjetas, archivos = await vista.pagina_actual()
+        vista.mensaje = await interaction.followup.send(content=contenido, embeds=tarjetas, files=archivos,
+                                                        view=vista, wait=True)
+
+
+async def enviar_series(destino, ctx, texto: str, series, todos, segundos: float, actual_url: str = ""):
+    """Un embed por serie (máx. 3) con su portada; menú para descargar y botón de lista completa."""
+    embeds, archivos = [], []
+    async with aiohttp.ClientSession(headers={"User-Agent": core.config.USER_AGENT},
+                                     timeout=aiohttp.ClientTimeout(total=15)) as s:
+        portadas = await asyncio.gather(*(_bajar_portada(s, serie.partes[0].resultados[0]) for serie in series[:3]))
+    for i, (serie, portada) in enumerate(zip(series[:3], portadas)):
+        e = _embed_serie(serie, i, actual_url)
+        if portada:
+            nombre = f"serie_{i}.{portada[1]}"
+            archivos.append(discord.File(io.BytesIO(portada[0]), filename=nombre))
+            e.set_thumbnail(url=f"attachment://{nombre}")
+        embeds.append(e)
+    n_partes = sum(len(x.partes) for x in series[:3])
+    contenido = (f"📚 **«{texto[:200]}»** · {len(series)} serie(s), {n_partes} parte(s) agrupadas con IA "
+                 f"de {len(todos)} resultado(s) · {segundos:.1f}s")
+    vista = SeriesView(ctx, texto, series[:3], todos, segundos, actual_url)
+    return await destino.send(content=contenido[:2000], embeds=embeds, files=archivos, view=vista)
+
+
 async def informar_autor_y_continuaciones(ctx, titulo: str, url: str):
-    """Tras una descarga: autor y otras partes de la serie en los sitios compatibles."""
+    """Tras una descarga: autor y otras partes de la serie en los sitios compatibles.
+    Primero intenta agrupar con DeepSeek (series > partes > fuentes); si no puede, usa la
+    detección por número de parte."""
     try:
         base = _titulo_para_series(titulo)
+        t0 = time.time()
+        autor = await busqueda.autor(url, titulo)
+        series, todos, _ = await agrupador.series_para(base, actual=titulo,
+                                                       artista=(autor or "").split(",")[0].strip() or None)
+        if series:
+            await enviar_series(ctx, ctx, base, series, todos, time.time() - t0, actual_url=url)
+            return
+    except Exception as e:
+        print(f"[WARN] Agrupar series tras descarga: {e}")
+    try:
         autor, (siguientes, relacionadas) = await asyncio.gather(
             busqueda.autor(url, titulo), busqueda.continuaciones(base, url))
     except Exception as e:
@@ -758,6 +863,33 @@ async def buscar_cmd(ctx, *, texto: Optional[str] = None):
         embed.description = "Sin resultados en los sitios compatibles. Prueba con menos palabras o el título en romaji."
         await espera.edit(embed=embed)
         return
+
+    # Agrupar en series y partes: más obras del artista + DeepSeek. Si falla, lista paginada.
+    try:
+        artista = agrupador.artista_probable(resultados)
+        todos = list(resultados)
+        if artista and busqueda.normalizar(artista) not in busqueda.normalizar(texto):
+            await espera.edit(embed=discord.Embed(
+                title=f"📚 Buscando más obras de {artista[:100]}...",
+                description=f"{len(resultados)} resultado(s) por título. Las series suelen tener títulos distintos "
+                            f"en cada parte: se buscan todas las obras del artista.", color=discord.Color.blue()))
+            urls = {r.url for r in todos}
+            todos += [r for r in await busqueda.buscar(artista, limite=50) if r.url not in urls]
+        await espera.edit(embed=discord.Embed(title="🤖 Agrupando por series y partes...",
+                                              description=f"{len(todos)} resultado(s) · DeepSeek",
+                                              color=discord.Color.blue()))
+        series = await agrupador.agrupar(texto, todos[:agrupador.MAX_CANDIDATOS])
+    except Exception as e:
+        print(f"[WARN] Agrupar series: {e}")
+        series = None
+    if series:
+        try:
+            await espera.delete()
+        except discord.errors.HTTPException:
+            pass
+        await enviar_series(ctx, ctx, texto, series, todos, time.time() - t0)
+        return
+
     vista = ResultadosPaginadosView(ctx, texto, resultados, time.time() - t0)
     contenido, tarjetas, archivos = await vista.pagina_actual()
     try:
