@@ -46,10 +46,10 @@ MangaDownloader y MangaScan AI son **dos repos hermanos**: se desarrollan y desp
    mientras llegan; luego `img2pdf` arma el PDF.
 2. **Entrega.** Si el PDF pesa ≤ 7,9 MB se adjunta en Discord; si no, se sube a **GoFile** y se apunta en
    `PDF/.gofile_index.json`. Junto al PDF aparece el botón **🌐 Traducir**.
-3. **Autor, continuaciones y versión sin censura (a petición).** Tras cada descarga el bot muestra el autor
-   y tres botones: **🔎 Buscar continuación** (las otras partes de la serie en todos los sitios, agrupadas en
-   series › partes › fuentes por idioma, con un menú para descargarlas), **🔓 Versión sin censura** y
-   **✍️ Más obras de &lt;autor&gt;**. No busca nada hasta que pulsas uno.
+3. **Autor y continuaciones (a petición).** Tras cada descarga el bot muestra el autor y dos botones:
+   **🔎 Buscar continuación** (las otras partes de la serie en todos los sitios, agrupadas en series › partes ›
+   fuentes por idioma, con un menú para descargarlas) y **✍️ Más obras de &lt;autor&gt;**. No busca nada hasta
+   que pulsas uno. (La versión sin censura se pide en el listado de `!buscar`, antes de descargar.)
 4. **Traducción.** El bot sube el PDF local a MangaScan por la LAN (sin el límite de Discord), sigue el
    progreso y devuelve el PDF traducido por Discord o GoFile.
 
@@ -65,9 +65,8 @@ MangaDownloader y MangaScan AI son **dos repos hermanos**: se desarrollan y desp
 | `!help` | Ayuda. |
 
 **Botones:** ⏹️ Cancelar (descarga y traducción; no deja PDFs a medias), 🌐 Traducir (en cada PDF entregado),
-🔎 *Buscar continuación*, 🔓 *Versión sin censura* y ✍️ *Más obras de &lt;autor&gt;* (tras cada descarga); menú
-*Descargar una parte*, ✍️ *Más obras de &lt;artista&gt;*, 🔓 *Versión sin censura* y 📋 *Ver todos los resultados*
-en las series. En la lista de tarjetas (también la de `!buscar <código>`): menús *Elige uno para descargarlo*,
+🔎 *Buscar continuación* y ✍️ *Más obras de &lt;autor&gt;* (tras cada descarga); menú *Descargar una parte*,
+🔓 *Versión sin censura*, 📋 *Ver todos los resultados* y ✍️ *Más obras de &lt;artista&gt;* en las series. En la lista de tarjetas (también la de `!buscar <código>`): menús *Elige uno para descargarlo*,
 *🔎 Buscar continuación de…*, *✍️ Más obras del autor de…* y *🔓 Buscar versión sin censura de…*. Las tarjetas
 sin censura llevan la marca 🔓.
 
@@ -91,8 +90,9 @@ Para buscar una obra cuyo título es un número, añade alguna palabra (`!buscar
 ### Versión sin censura
 
 Muchas obras tienen una versión *uncensored* / *decensored* / *sin censura*. Se pide con
-`!buscar <título> uncensored`, con el botón **🔓 Versión sin censura** (tras una descarga o en las series) o
-con el menú **🔓 Buscar versión sin censura de…** de la lista de tarjetas.
+`!buscar <título> uncensored`, con el botón **🔓 Versión sin censura** que sale nada más listar las series de
+`!buscar` (no hace falta descargar antes) o con el menú **🔓 Buscar versión sin censura de…** de la lista de
+tarjetas.
 
 Buscar la palabra «uncensored» a secas devuelve cualquier obra sin censura, así que el bot busca **el título
 de la obra** (sin etiquetas como `[English]` ni el título alternativo) en los 14 sitios, solo y con
