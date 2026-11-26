@@ -42,6 +42,7 @@ class Resultado:
     puntuacion: float = 0.0
     numero: Optional[float] = None
     portada: str = ""  # URL de la miniatura/portada (la tarjeta del resultado la trae)
+    idioma: Optional[str] = None  # "es", "en", "ja", "zh"... (None = desconocido)
     extra: dict = field(default_factory=dict)
 
 
@@ -186,7 +187,7 @@ async def _hitomi(s, q):
             except Exception:
                 return None
     infos = await asyncio.gather(*(una(g) for g in ids))
-    return [("hitomi", t, u, img) for t, u, img, _ in (i for i in infos if i)]
+    return [("hitomi", t, u, img, idioma) for t, u, img, _, idioma in (i for i in infos if i)]
 
 
 async def _hentai2read(s, q):
@@ -267,7 +268,7 @@ async def buscar(texto: str, minimo: float = 0.6, limite: int = 25) -> List[Resu
         listas = await asyncio.gather(*(seguro(f, q) for f in BUSCADORES for q in variantes))
     resultados, urls = [], set()
     for lista in listas:
-        for sitio, titulo, url, portada in lista:
+        for sitio, titulo, url, portada, *pista in lista:
             if url in urls:
                 continue
             p = parecido(texto, titulo)
@@ -278,9 +279,67 @@ async def buscar(texto: str, minimo: float = 0.6, limite: int = 25) -> List[Resu
                 p = PUNTUACION_POR_ETIQUETA
             if p >= minimo:
                 urls.add(url)
-                resultados.append(Resultado(sitio, titulo, url, p, titulo_base(titulo)[1], portada))
+                resultados.append(Resultado(sitio, titulo, url, p, titulo_base(titulo)[1], portada,
+                                            idioma_de(titulo, sitio, pista[0] if pista else "")))
     resultados.sort(key=lambda r: (-r.puntuacion, r.numero if r.numero is not None else 1e9, r.sitio))
     return resultados[:limite]
+
+
+# ─── Idioma ──────────────────────────────────────────────────────────────────
+_IDIOMAS_TITULO = [  # (código, patrón en el título); el primero que aparezca manda
+    ("es", r"espa[ñn]ol|spanish|castellano|spa|esp"),
+    ("en", r"english|eng"),
+    ("zh", r"chinese|中文|汉化|漢化|中国翻訳|中國翻譯"),
+    ("ko", r"korean|한국어|kor"),
+    ("vi", r"vietnamese|ti[ếe]ng vi[ệe]t"),
+    ("ru", r"russian|русский"),
+    ("pt", r"portugu[eê]s|portuguese|pt-?br"),
+    ("fr", r"fran[cç]ais|french"),
+    ("id", r"indonesian|bahasa"),
+    ("th", r"thai"),
+    ("de", r"german|deutsch"),
+    ("it", r"italian|italiano"),
+    ("ja", r"japanese|日本語|raw"),
+]
+_IDIOMA_HITOMI = {"spanish": "es", "english": "en", "japanese": "ja", "chinese": "zh", "korean": "ko",
+                  "vietnamese": "vi", "russian": "ru", "portuguese": "pt", "french": "fr", "indonesian": "id",
+                  "thai": "th", "german": "de", "italian": "it"}
+# Sitios que solo publican en un idioma
+_IDIOMA_SITIO = {"tmohentai.app": "es", "lectorhentai": "es", "m440": "es", "hentainexus": "en", "hentai2read": "en"}
+
+BANDERA = {"es": "🇪🇸", "en": "🇬🇧", "ja": "🇯🇵", "zh": "🇨🇳", "ko": "🇰🇷", "vi": "🇻🇳", "ru": "🇷🇺", "pt": "🇧🇷",
+           "fr": "🇫🇷", "id": "🇮🇩", "th": "🇹🇭", "de": "🇩🇪", "it": "🇮🇹", None: "🏳️"}
+# Orden de presentación: español, inglés, desconocido, japonés (original) y el resto
+_PRIORIDAD = {"es": 0, "en": 1, None: 2, "ja": 3}
+
+
+def idioma_de(titulo: str, sitio: str, pista: str = "") -> Optional[str]:
+    """Idioma de un resultado: dato del sitio (Hitomi), etiqueta del título o idioma fijo del sitio.
+    Un título solo con kana/kanji y sin etiqueta se toma como japonés."""
+    if pista and pista.lower() in _IDIOMA_HITOMI:
+        return _IDIOMA_HITOMI[pista.lower()]
+    # Las etiquetas de idioma van entre corchetes o paréntesis; si no hay, se mira el título entero
+    etiquetas = " ".join(re.findall(r"[\[(]([^\])]+)[\])]", titulo or "")) or (titulo or "")
+    for codigo, patron in _IDIOMAS_TITULO:
+        if re.search(patron, etiquetas, re.I) or re.search(patron, titulo or "", re.I):
+            return codigo
+    if sitio in _IDIOMA_SITIO:
+        return _IDIOMA_SITIO[sitio]
+    if re.search(r"[가-힯]", titulo or ""):  # hangul
+        return "ko"
+    if re.search(r"[぀-ヿ一-鿿]", titulo or "") and not re.search(r"[a-zA-Z]{4,}", titulo or ""):
+        return "ja"
+    return None
+
+
+def prioridad_idioma(r: "Resultado") -> int:
+    return _PRIORIDAD.get(r.idioma, 4)
+
+
+def ordenar_por_idioma(resultados: List["Resultado"]) -> List["Resultado"]:
+    """Español primero, luego inglés, desconocido, japonés y el resto; dentro, por parecido."""
+    return sorted(resultados, key=lambda r: (prioridad_idioma(r), -r.puntuacion,
+                                             r.numero if r.numero is not None else 1e9, r.sitio))
 
 
 # ─── Autor ───────────────────────────────────────────────────────────────────
