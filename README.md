@@ -6,6 +6,30 @@ serie con IA (DeepSeek) y, con un botón, **los traduce** con [MangaScan AI](htt
 Se usa sobre todo como **bot de Discord** (corre en un NAS con Docker), pero el mismo núcleo (`core/`) sirve
 también a una interfaz web (Next.js + FastAPI) y a una app de escritorio (Tkinter).
 
+## Repos hermanos
+
+MangaDownloader y MangaScan AI son **dos repos hermanos**: se desarrollan y despliegan por separado, pero forman una sola herramienta. Este repo **consigue** el manga y MangaScan lo **traduce**.
+
+| Repo | Qué hace | En el NAS |
+|---|---|---|
+| [**MangaDownloader**](https://github.com/Holkeano526/MangaDownloader) | Descarga a PDF desde 14 sitios, `!buscar` en todos a la vez, agrupación de series con DeepSeek. Bot de Discord, web y escritorio | `manga_discord_bot` (receta OMV `manga-downloader`) |
+| [**MangaScan AI**](https://github.com/Holkeano526/mangascan) | Traduce el PDF al español latino: detección y borrado en la iGPU, OCR y DeepSeek | `mangascan-ai`, puerto `8001` |
+
+**Contrato entre los dos** (`mangascan_client.py` en MangaDownloader ↔ API de MangaScan):
+
+| Endpoint de MangaScan | Para qué lo usa el bot |
+|---|---|
+| `GET /api/jobs` | Ver si MangaScan responde y si tiene trabajos en cola |
+| `POST /api/upload` | Subir el PDF (por la LAN, sin el límite de tamaño de Discord) |
+| `GET /api/stream/{task_id}` | Progreso en vivo (SSE) para el embed de Discord |
+| `GET /api/download/{task_id}` | Descargar el PDF traducido |
+| `POST /api/cancel/{task_id}` y `DELETE /api/jobs/{task_id}` | Botón ⏹️ Cancelar: parar el trabajo y borrarlo de la Biblioteca |
+
+- **Cambiar uno de estos endpoints** (ruta, campos o formato del SSE) obliga a actualizar el otro repo en el mismo ciclo: un PR en cada uno, y desplegar primero MangaScan.
+- **Configuración compartida:** el bot apunta a MangaScan con `MANGASCAN_URL` y usa la **misma clave de DeepSeek** (`DEEPSEEK_API_KEY`, modelo `deepseek-flash`) para agrupar series.
+- **Independientes:** cada uno funciona solo. Si MangaScan está apagado, el bot descarga igual y el botón 🌐 Traducir avisa de que MangaScan no responde. MangaScan tiene su propia interfaz web para subir PDFs a mano.
+- **Mismas convenciones:** documentación en español, diagrama de flujo en `docs/flujo_app.drawio(.svg)`, rama + PR por cambio e imagen base congelada para desplegar en el NAS.
+
 ## Cómo funciona
 
 <p align="center">
@@ -70,7 +94,7 @@ Variables de entorno (en Docker van en el `.env` del servicio):
 | `DEEPSEEK_API_KEY` | — | Agrupación de series con IA. Sin clave, `!buscar` muestra la lista normal. |
 | `DEEPSEEK_MODEL` | `deepseek-flash` | Modelo de DeepSeek. |
 | `DEEPSEEK_API_URL` | `https://api.deepseek.com/chat/completions` | Endpoint compatible con OpenAI. |
-| `MANGASCAN_URL` | — | URL de MangaScan AI en la LAN (p. ej. `http://192.168.1.x:8001`). |
+| `MANGASCAN_URL` | IP del NAS, puerto `8001` | URL de MangaScan AI en la LAN (repo hermano, ver arriba). |
 | `CONCURRENCIA_IMAGENES` | `3` | Conexiones simultáneas por descarga. |
 | `JPEG_CALIDAD` | `70` | Calidad al convertir WebP/AVIF a JPEG. |
 | `HEADLESS` | `true` | Navegador sin ventana (Docker). |
