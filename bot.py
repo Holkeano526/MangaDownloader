@@ -608,7 +608,7 @@ async def descargar(ctx, url: str):
 
 # ─── Búsqueda, autor y continuaciones ─────────────────────────────────────────
 ICONO_SITIO = {"hentainexus": "🟣", "nhentai.to": "🔴", "nhentai.xxx": "🔴", "nhentai.website": "🔴",
-               "tmohentai.app": "🟠", "lectorhentai": "🟢", "hitomi": "🔵", "3hentai": "🟡", "hentai2read": "🟤", "m440": "⚫"}
+               "tmohentai.app": "🟠", "lectorhentai": "🟢", "hitomi": "🔵", "3hentai": "🟡", "hentai2read": "🟤", "m440": "⚫", "hentalk": "🟦"}
 
 
 def _linea_resultado(i: int, r: "busqueda.Resultado") -> str:
@@ -620,7 +620,7 @@ def _linea_resultado(i: int, r: "busqueda.Resultado") -> str:
 
 COLOR_SITIO = {"hentainexus": 0x9b59b6, "nhentai.to": 0xe74c3c, "nhentai.xxx": 0xe74c3c, "nhentai.website": 0xe74c3c,
                "tmohentai.app": 0xe67e22, "lectorhentai": 0x2ecc71, "hitomi": 0x3498db,
-               "3hentai": 0xf1c40f, "hentai2read": 0x8e5a3c, "m440": 0x34495e}
+               "3hentai": 0xf1c40f, "hentai2read": 0x8e5a3c, "m440": 0x34495e, "hentalk": 0x1abc9c}
 
 
 async def _bajar_portada(session: aiohttp.ClientSession, r) -> Optional[tuple]:
@@ -854,7 +854,7 @@ async def buscar_cmd(ctx, *, texto: Optional[str] = None):
     texto = texto.strip()
     espera = await ctx.send(embed=discord.Embed(title=f"🔎 Buscando «{texto[:200]}»...",
                                                 description="Hitomi · hentainexus · nhentai (to, xxx, website) · 3hentai · "
-                                                            "hentai2read · m440 · tmohentai · lectorhentai",
+                                                            "hentai2read · m440 · hentalk · tmohentai · lectorhentai",
                                                 color=discord.Color.blue()))
     t0 = time.time()
     resultados = busqueda.ordenar_por_idioma(await busqueda.buscar(texto, limite=50))

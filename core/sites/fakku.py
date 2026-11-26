@@ -23,7 +23,9 @@ class FakkuHandler(BaseSiteHandler):
     
     @staticmethod
     def get_supported_domains() -> list:
-        return ["fakku.cc"]
+        # fakku.cc (SpyFakku) no responde desde nov-2026; su contenido sigue en hentalk.pw y
+        # HentalkHandler atiende sus enlaces. Este handler queda sin dominio.
+        return []
     
     async def process(
         self,
