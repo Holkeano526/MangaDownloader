@@ -25,7 +25,10 @@ class HentalkHandler(BaseSiteHandler):
 
     @staticmethod
     def get_supported_domains() -> list:
-        return ["hentalk.pw"]
+        # fakku.cc era otro espejo del mismo servidor (SpyFakku): mismos números de galería.
+        # Ya no responde, así que sus enlaces /g/<id> se descargan desde hentalk.pw.
+        # (keiyoushi/extensions-source, src/en/spyfakku: espejos hentalk.pw, fakku.cc, ...)
+        return ["hentalk.pw", "fakku.cc"]
 
     async def process(
         self,

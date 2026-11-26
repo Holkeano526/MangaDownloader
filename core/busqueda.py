@@ -15,6 +15,7 @@ Búsqueda por sitio (vista el 25/11/2026; todo por HTTP):
   3hentai.net       /search?q=<texto>
   hentai2read.com   /search?q=<texto>  (Inertia.js: JSON en <script data-page="app">)
   m440.in           /search?q=<texto>  (JSON)
+  hentalk.pw        /api/library?q=<texto>  (JSON; SpyFakku, antes también fakku.cc)
   hitomi.la         índices binarios (árbol B de palabras del título + ficheros .nozomi de artista/grupo)
 """
 from __future__ import annotations
@@ -104,7 +105,8 @@ def _normalizar_completo(t: str) -> str:
 # (por detrás de los que sí casan por título). lectorhentai busca palabra a palabra y tmohentai
 # casa también palabras traducidas ("wife" -> "Mi Esposa Gyaru"): meten ruido y no se rescatan.
 # hentai2read casa por título alternativo ("natsuzuma" -> "Summer Wife ..."): sí se rescata.
-ESTRICTOS = {"hitomi", "hentainexus", "nhentai.to", "nhentai.xxx", "nhentai.website", "3hentai", "hentai2read", "m440"}
+ESTRICTOS = {"hitomi", "hentainexus", "nhentai.to", "nhentai.xxx", "nhentai.website", "3hentai", "hentai2read", "m440",
+             "hentalk"}
 PUNTUACION_POR_ETIQUETA = 0.6
 
 
@@ -217,6 +219,20 @@ async def _m440(s, q):
     return res
 
 
+async def _hentalk(s, q):
+    """hentalk.pw (SpyFakku, catálogo de FAKKU en inglés): API JSON /api/library?q=<texto>."""
+    import json
+    texto = await _get(s, f"https://hentalk.pw/api/library?q={quote_plus(q)}",
+                       headers={"X-Requested-With": "XMLHttpRequest"})
+    try:
+        archivos = (json.loads(texto) if texto else {}).get("archives") or []
+    except ValueError:
+        return []
+    return [("hentalk", a.get("title", ""), f"https://hentalk.pw/g/{a['id']}",
+             f"https://hentalk.pw/image/{a['hash']}/{a.get('thumbnail', 1)}?type=cover" if a.get("hash") else "")
+            for a in archivos if a.get("id") and a.get("title")]
+
+
 async def _3hentai(s, q):
     p = await _get(s, f"https://3hentai.net/search?q={quote_plus(q)}")
     return [("3hentai", t, u, img) for u, t, img in _enlaces(p, "https://3hentai.net/", r"/d/\d+")]
@@ -245,7 +261,7 @@ async def _lectorhentai(s, q):
 
 
 BUSCADORES = [_hitomi, _hentainexus, _nhentai_to, _nhentai_xxx, _nhentai_website, _3hentai, _hentai2read, _m440,
-              _tmohentai, _lectorhentai]
+              _hentalk, _tmohentai, _lectorhentai]
 
 
 async def buscar(texto: str, minimo: float = 0.6, limite: int = 25) -> List[Resultado]:
@@ -305,7 +321,8 @@ _IDIOMA_HITOMI = {"spanish": "es", "english": "en", "japanese": "ja", "chinese":
                   "vietnamese": "vi", "russian": "ru", "portuguese": "pt", "french": "fr", "indonesian": "id",
                   "thai": "th", "german": "de", "italian": "it"}
 # Sitios que solo publican en un idioma
-_IDIOMA_SITIO = {"tmohentai.app": "es", "lectorhentai": "es", "m440": "es", "hentainexus": "en", "hentai2read": "en"}
+_IDIOMA_SITIO = {"tmohentai.app": "es", "lectorhentai": "es", "m440": "es", "hentainexus": "en", "hentai2read": "en",
+                 "hentalk": "en"}
 
 BANDERA = {"es": "🇪🇸", "en": "🇬🇧", "ja": "🇯🇵", "zh": "🇨🇳", "ko": "🇰🇷", "vi": "🇻🇳", "ru": "🇷🇺", "pt": "🇧🇷",
            "fr": "🇫🇷", "id": "🇮🇩", "th": "🇹🇭", "de": "🇩🇪", "it": "🇮🇹", None: "🏳️"}
