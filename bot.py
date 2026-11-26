@@ -462,7 +462,7 @@ async def descargar(ctx, url: str):
         traceback.print_exc()
 
 @bot.command(name='traducir')
-async def traducir(ctx, enlace: Optional[str] = None):
+async def traducir(ctx, *, enlace: Optional[str] = None):  # '*': el nombre puede tener espacios
     """
     Traduce un manga al español con MangaScan AI.
     Usos:
@@ -480,6 +480,7 @@ async def traducir(ctx, enlace: Optional[str] = None):
         return
 
     if enlace:
+        enlace = enlace.strip().strip('"').strip("<>")  # comillas o <enlace> de Discord
         ruta = _pdf_de_gofile(enlace) if "gofile.io" in enlace else _find_pdf_fast(os.path.basename(enlace))
         if ruta:
             bot.loop.create_task(traducir_y_entregar(ctx.channel, ruta, ctx.author.display_name))
