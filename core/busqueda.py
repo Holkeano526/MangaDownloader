@@ -12,6 +12,7 @@ Búsqueda por sitio (vista el 25/11/2026; todo por HTTP):
   nhentai.website   /search?q=<texto>
   tmohentai.app     /?title=<texto> con X-Requested-With (devuelve JSON {"html": ...})
   lectorhentai.com  /tipo/all?s=<texto>
+  3hentai.net       /search?q=<texto>
 Hitomi no tiene un buscador por HTTP sencillo (índices binarios "nozomi"): no se busca allí.
 """
 from __future__ import annotations
@@ -77,12 +78,30 @@ def parecido(consulta: str, titulo: str) -> float:
     aparecen seguidas. Las palabras vacías ("the", "de", "no"...) no cuentan."""
     todas = normalizar(consulta).split()
     q = [w for w in todas if w not in VACIAS] or todas
-    t = normalizar(titulo)
     if not q:
         return 0.0
-    palabras = set(t.split())
-    base = sum(1 for w in q if w in palabras) / len(q)
-    return base + (0.25 if " ".join(todas) in t else 0.0)
+    mejor = 0.0
+    # Se compara con el título limpio y con el título COMPLETO: entre corchetes van el círculo
+    # y el artista ("[Hanamori Banbi (Babi)] ..."), y se busca por ellos ("!buscar babi").
+    for t in (normalizar(titulo), _normalizar_completo(titulo)):
+        palabras = set(t.split())
+        base = sum(1 for w in q if w in palabras) / len(q)
+        mejor = max(mejor, base + (0.25 if " ".join(todas) in t else 0.0))
+    return mejor
+
+
+def _normalizar_completo(t: str) -> str:
+    """Como normalizar() pero conservando lo que hay entre corchetes y paréntesis."""
+    t = unicodedata.normalize("NFKD", html.unescape(t or "")).encode("ascii", "ignore").decode()
+    return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9]+", " ", t.lower())).strip()
+
+
+# Sitios cuyo buscador es estricto (casa título, artista o etiqueta exactos): si un resultado
+# suyo no contiene las palabras en el título, es que casó por artista/etiqueta y se conserva
+# (por detrás de los que sí casan por título). lectorhentai busca palabra a palabra y tmohentai
+# casa también palabras traducidas ("wife" -> "Mi Esposa Gyaru"): meten ruido y no se rescatan.
+ESTRICTOS = {"hentainexus", "nhentai.to", "nhentai.xxx", "nhentai.website", "3hentai"}
+PUNTUACION_POR_ETIQUETA = 0.6
 
 
 # ─── Extracción de enlaces de resultados ─────────────────────────────────────
@@ -148,6 +167,11 @@ async def _nhentai_website(s, q):
     return [("nhentai.website", t, u, img) for u, t, img in _enlaces(p, "https://nhentai.website/", r"/read/\d+")]
 
 
+async def _3hentai(s, q):
+    p = await _get(s, f"https://3hentai.net/search?q={quote_plus(q)}")
+    return [("3hentai", t, u, img) for u, t, img in _enlaces(p, "https://3hentai.net/", r"/d/\d+")]
+
+
 async def _tmohentai(s, q):
     import json
     cab = {"X-Requested-With": "XMLHttpRequest", "Accept": "application/json"}
@@ -170,7 +194,7 @@ async def _lectorhentai(s, q):
     return res
 
 
-BUSCADORES = [_hentainexus, _nhentai_to, _nhentai_xxx, _nhentai_website, _tmohentai, _lectorhentai]
+BUSCADORES = [_hentainexus, _nhentai_to, _nhentai_xxx, _nhentai_website, _3hentai, _tmohentai, _lectorhentai]
 
 
 async def buscar(texto: str, minimo: float = 0.6, limite: int = 25) -> List[Resultado]:
@@ -197,6 +221,11 @@ async def buscar(texto: str, minimo: float = 0.6, limite: int = 25) -> List[Resu
             if url in urls:
                 continue
             p = parecido(texto, titulo)
+            if p == 0 and sitio in ESTRICTOS:
+                # Ninguna palabra en el título: el sitio lo encontró por artista o etiqueta.
+                # (Si casa ALGUNA palabra es una coincidencia parcial de título, p. ej. "The Demon
+                # Wife" para "The Wife-Lenders", y no se rescata.)
+                p = PUNTUACION_POR_ETIQUETA
             if p >= minimo:
                 urls.add(url)
                 resultados.append(Resultado(sitio, titulo, url, p, titulo_base(titulo)[1], portada))

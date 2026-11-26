@@ -607,7 +607,7 @@ async def descargar(ctx, url: str):
 
 # ─── Búsqueda, autor y continuaciones ─────────────────────────────────────────
 ICONO_SITIO = {"hentainexus": "🟣", "nhentai.to": "🔴", "nhentai.xxx": "🔴", "nhentai.website": "🔴",
-               "tmohentai.app": "🟠", "lectorhentai": "🟢", "hitomi": "🔵"}
+               "tmohentai.app": "🟠", "lectorhentai": "🟢", "hitomi": "🔵", "3hentai": "🟡"}
 
 
 def _linea_resultado(i: int, r: "busqueda.Resultado") -> str:
@@ -615,7 +615,8 @@ def _linea_resultado(i: int, r: "busqueda.Resultado") -> str:
 
 
 COLOR_SITIO = {"hentainexus": 0x9b59b6, "nhentai.to": 0xe74c3c, "nhentai.xxx": 0xe74c3c, "nhentai.website": 0xe74c3c,
-               "tmohentai.app": 0xe67e22, "lectorhentai": 0x2ecc71, "hitomi": 0x3498db}
+               "tmohentai.app": 0xe67e22, "lectorhentai": 0x2ecc71, "hitomi": 0x3498db,
+               "3hentai": 0xf1c40f}
 
 
 async def _bajar_portada(session: aiohttp.ClientSession, r) -> Optional[tuple]:
@@ -744,7 +745,7 @@ async def buscar_cmd(ctx, *, texto: Optional[str] = None):
         return
     texto = texto.strip()
     espera = await ctx.send(embed=discord.Embed(title=f"🔎 Buscando «{texto[:200]}»...",
-                                                description="hentainexus · nhentai (to, xxx, website) · "
+                                                description="hentainexus · nhentai (to, xxx, website) · 3hentai · "
                                                             "tmohentai · lectorhentai",
                                                 color=discord.Color.blue()))
     t0 = time.time()
