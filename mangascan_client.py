@@ -13,6 +13,7 @@ Configuración: MANGASCAN_URL (por defecto http://192.168.1.86:8001).
 """
 from __future__ import annotations
 
+import asyncio
 import os
 import re
 from dataclasses import dataclass, field
@@ -136,3 +137,18 @@ async def traducir_pdf(ruta_pdf: str, carpeta_salida: str, on_estado: Callback) 
                     out.write(trozo)
         estado.fase = "Terminada"
         return estado, destino
+
+
+async def cancelar(task_id: str, borrar: bool = True) -> bool:
+    """Cancela una traducción en MangaScan y, si borrar, quita sus restos de la Biblioteca."""
+    try:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15)) as s:
+            async with s.post(f"{MANGASCAN_URL}/api/cancel/{task_id}") as r:
+                ok = r.status == 200
+            if borrar:
+                await asyncio.sleep(2)  # que el proceso termine antes de borrar su carpeta
+                async with s.delete(f"{MANGASCAN_URL}/api/jobs/{task_id}") as r:
+                    pass
+            return ok
+    except Exception:
+        return False

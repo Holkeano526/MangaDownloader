@@ -349,7 +349,10 @@ async def download_and_make_pdf(image_urls: List[str], output_name: str, headers
     
     files = await descargar_imagenes(image_urls, temp_folder, headers, log_callback, check_cancel, progress_callback)
     if check_cancel and check_cancel():
+        # Cancelado: no se genera un PDF a medias
         log_callback("[INFO] Process cancelled by user.")
+        shutil.rmtree(temp_folder, ignore_errors=True)
+        return
     if len(files) < len(image_urls):
         log_callback(f"[WARN] {len(image_urls) - len(files)} de {len(image_urls)} páginas no se pudieron descargar.")
 
