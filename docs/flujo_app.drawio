@@ -1,6 +1,6 @@
 <mxfile host="drawio" agent="MangaDownloader docs" version="24.0.0">
   <diagram id="flujo-mangadownloader" name="Flujo de MangaDownloader">
-    <mxGraphModel dx="1400" dy="1100" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1300" pageHeight="1300" background="#ffffff" math="0" shadow="0">
+    <mxGraphModel dx="1400" dy="1100" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1300" pageHeight="1360" background="#ffffff" math="0" shadow="0">
       <root>
         <mxCell id="0" />
         <mxCell id="1" parent="0" />
@@ -120,6 +120,25 @@
         <mxCell id="x5" value="tras descargar" style="edgeStyle=orthogonalEdgeStyle;html=1;labelBackgroundColor=#ffffff;strokeColor=#0284c7;dashed=1;endArrow=block;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="info" target="vistas"><mxGeometry relative="1" as="geometry" /></mxCell>
         <mxCell id="x6" value="descargar una parte" style="edgeStyle=orthogonalEdgeStyle;html=1;labelBackgroundColor=#ffffff;strokeColor=#0284c7;dashed=1;endArrow=block;exitX=1;exitY=0.5;entryX=0.5;entryY=1;" edge="1" parent="1" source="vistas" target="router"><mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="1285" y="847" /><mxPoint x="1285" y="578" /><mxPoint x="175" y="578" /></Array></mxGeometry></mxCell>
         <mxCell id="x7" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#7c3aed;endArrow=block;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="boton_trad" target="cliente"><mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="545" y="910" /><mxPoint x="225" y="910" /></Array></mxGeometry></mxCell>
+
+        <!-- REPOS HERMANOS -->
+        <mxCell id="carril_her" value="5 · Repos hermanos: una sola herramienta, dos repos" style="swimlane;startSize=26;html=1;fillColor=#f8fafc;strokeColor=#334155;fontColor=#0f172a;fontSize=13;rounded=1;" vertex="1" parent="1">
+          <mxGeometry x="40" y="1075" width="1220" height="250" as="geometry" />
+        </mxCell>
+        <mxCell id="her_md" value="&lt;b&gt;MangaDownloader&lt;/b&gt; (este repo)&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;github.com/Holkeano526/MangaDownloader&lt;br&gt;&lt;b&gt;consigue&lt;/b&gt; el manga: descarga a PDF, !buscar, series&lt;br&gt;NAS: contenedor manga_discord_bot&lt;br&gt;(receta OMV manga-downloader)&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#14532d;strokeColor=#16a34a;fontColor=#ffffff;fontSize=13;" vertex="1" parent="carril_her">
+          <mxGeometry x="20" y="40" width="270" height="110" as="geometry" />
+        </mxCell>
+        <mxCell id="her_api" value="&lt;b&gt;Contrato HTTP por la LAN&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;mangascan_client.py → API de MangaScan&lt;br&gt;GET /api/jobs · ¿responde?, cola&lt;br&gt;POST /api/upload · sube el PDF&lt;br&gt;GET /api/stream/{id} · progreso (SSE)&lt;br&gt;GET /api/download/{id} · PDF traducido&lt;br&gt;POST /api/cancel/{id} + DELETE /api/jobs/{id} · ⏹️ Cancelar&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#334155;fontSize=12;align=left;spacingLeft=10;" vertex="1" parent="carril_her">
+          <mxGeometry x="420" y="34" width="400" height="122" as="geometry" />
+        </mxCell>
+        <mxCell id="her_ms" value="&lt;b&gt;MangaScan AI&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;github.com/Holkeano526/mangascan&lt;br&gt;&lt;b&gt;traduce&lt;/b&gt; el PDF al español latino&lt;br&gt;NAS: contenedor mangascan-ai, puerto 8001&lt;br&gt;con su propia interfaz web&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#4c1d95;strokeColor=#7c3aed;fontColor=#ffffff;fontSize=13;" vertex="1" parent="carril_her">
+          <mxGeometry x="930" y="40" width="270" height="110" as="geometry" />
+        </mxCell>
+        <mxCell id="her_e1" value="PDF +&lt;br&gt;órdenes" style="edgeStyle=orthogonalEdgeStyle;html=1;labelBackgroundColor=#f8fafc;strokeColor=#334155;endArrow=block;fontSize=11;" edge="1" parent="carril_her" source="her_md" target="her_api"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="her_e2" value="progreso +&lt;br&gt;PDF traducido" style="edgeStyle=orthogonalEdgeStyle;html=1;labelBackgroundColor=#f8fafc;strokeColor=#7c3aed;endArrow=block;startArrow=block;fontSize=11;" edge="1" parent="carril_her" source="her_api" target="her_ms"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="her_conf" value="&lt;b&gt;Compartido:&lt;/b&gt; MANGASCAN_URL (el bot apunta a MangaScan) · la misma clave DEEPSEEK_API_KEY (deepseek-flash: el bot agrupa series, MangaScan traduce)&lt;br&gt;&lt;b&gt;Independientes:&lt;/b&gt; cada uno funciona solo; si MangaScan está apagado el bot descarga igual y 🌐 Traducir avisa&lt;br&gt;&lt;b&gt;Regla:&lt;/b&gt; cambiar un endpoint del contrato = un PR en cada repo en el mismo ciclo, y desplegar primero MangaScan" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f1f5f9;strokeColor=#94a3b8;fontColor=#0f172a;fontSize=11;align=left;spacingLeft=10;dashed=1;" vertex="1" parent="carril_her">
+          <mxGeometry x="20" y="170" width="1180" height="66" as="geometry" />
+        </mxCell>
       </root>
     </mxGraphModel>
   </diagram>
