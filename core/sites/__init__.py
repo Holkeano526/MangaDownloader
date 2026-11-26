@@ -9,3 +9,6 @@ from .h2r import H2RHandler
 from .m440 import M440Handler
 from .hentalk import HentalkHandler
 from .shademanga import ShadeMangaHandler
+from .sexkomix2 import SexKomix2Handler
+from .allporncomic import AllPornComicHandler
+from .imhentai import IMHentaiHandler

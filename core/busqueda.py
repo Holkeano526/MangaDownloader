@@ -16,6 +16,9 @@ Búsqueda por sitio (vista el 25/11/2026; todo por HTTP):
   hentai2read.com   /search?q=<texto>  (Inertia.js: JSON en <script data-page="app">)
   m440.in           /search?q=<texto>  (JSON)
   hentalk.pw        /api/library?q=<texto>  (JSON; SpyFakku, antes también fakku.cc)
+  imhentai.xxx      /search/?key=<texto>
+  allporncomic.com  /?s=<texto>&post_type=wp-manga  (Madara; resultado = cómic, se descarga por capítulos)
+  sexkomix2.com     /search/?lang=en&q=<texto>  (y lang=es; href con espacios alrededor del "=")
   hitomi.la         índices binarios (árbol B de palabras del título + ficheros .nozomi de artista/grupo)
 """
 from __future__ import annotations
@@ -106,7 +109,7 @@ def _normalizar_completo(t: str) -> str:
 # casa también palabras traducidas ("wife" -> "Mi Esposa Gyaru"): meten ruido y no se rescatan.
 # hentai2read casa por título alternativo ("natsuzuma" -> "Summer Wife ..."): sí se rescata.
 ESTRICTOS = {"hitomi", "hentainexus", "nhentai.to", "nhentai.xxx", "nhentai.website", "3hentai", "hentai2read", "m440",
-             "hentalk"}
+             "hentalk", "imhentai", "allporncomic"}
 PUNTUACION_POR_ETIQUETA = 0.6
 
 
@@ -120,6 +123,7 @@ def _enlaces(pagina: str, base: str, patron: str) -> List[Tuple[str, str, str]]:
     title, alt de la imagen, o el texto del enlace (el más largo si un mismo enlace aparece varias
     veces). Portada: la primera imagen dentro del enlace (data-src antes que src; sin data:)."""
     vistos: dict = {}
+    portada_sola: dict = {}  # enlaces que solo traen la imagen (imhentai: <a><img></a> y luego <a>Título</a>)
     for m in re.finditer(rf'<a\b([^>]*href="([^"]*{patron}[^"]*)"[^>]*)>(.*?)</a>', pagina, re.S | re.I):
         attrs, href, dentro = m.group(1), m.group(2), m.group(3)
         t = ""
@@ -137,6 +141,10 @@ def _enlaces(pagina: str, base: str, patron: str) -> List[Tuple[str, str, str]]:
             if not img.startswith("data:"):
                 portada = urljoin(base, img)
                 break
+        t = html.unescape(t)  # algunos sitios escapan dos veces (&amp;#039;)
+        if not t and portada:
+            portada_sola.setdefault(clave, portada)
+        portada = portada or portada_sola.get(clave, "")
         previo = vistos.get(clave)
         if t and (previo is None or len(t) > len(previo[1])):
             vistos[clave] = (urljoin(base, href), t.strip(), portada or (previo[2] if previo else ""))
@@ -260,8 +268,43 @@ async def _lectorhentai(s, q):
     return res
 
 
+async def _imhentai(s, q):
+    p = await _get(s, f"https://imhentai.xxx/search/?key={quote_plus(q)}")
+    return [("imhentai", t, u, img) for u, t, img in _enlaces(p, "https://imhentai.xxx/", r"/gallery/\d+/")]
+
+
+async def _allporncomic(s, q):
+    p = await _get(s, f"https://allporncomic.com/?s={quote_plus(q)}&post_type=wp-manga")
+    # Tarjeta Madara: <a href=".../porncomic/<slug>/" title="..."><img data-src="portada"></a> ...
+    #                 <h3 class="h4"><a href=".../porncomic/<slug>/">Título</a></h3>
+    portadas = dict(re.findall(r'<a href="(https://allporncomic\.com/porncomic/[^"/?]+/)"[^>]*>\s*<img[^>]*'
+                               r'data-src="([^"]+)"', p))
+    return [("allporncomic", _limpio(t), u, portadas.get(u, ""))
+            for u, t in re.findall(r'<h3 class="h4">\s*<a href="(https://allporncomic\.com/porncomic/[^"/?]+/)">'
+                                   r'(.*?)</a>', p, re.S)]
+
+
+async def _sexkomix2(s, q):
+    res = []
+    for lang in ("es", "en"):
+        p = await _get(s, f"https://sexkomix2.com/search/?lang={lang}&q={quote_plus(q)}")
+        for m in re.finditer(r'<li class\s*=\s*"comix">\s*<a href\s*=\s*"([^"]+)"(.*?)</a>', p, re.S):
+            href, dentro = m.group(1).strip(), m.group(2)
+            if not re.search(r"/comicsx_[a-z]{2}/\d+", href):
+                continue
+            t = re.search(r'class\s*=\s*"comix_title">\s*<h2><p>(.*?)</p>', dentro, re.S)
+            img = re.search(r'data-src\s*=\s*"([^"]+)"', dentro)
+            titulo = _limpio(t.group(1)) if t else ""
+            titulo = re.sub(r"^(?:Porn comic|Cómic porno|Comic porno)\s+", "", titulo, flags=re.I)
+            if titulo:
+                res.append(("sexkomix2", titulo, urljoin("https://sexkomix2.com/", href), img.group(1) if img else "",
+                            "spanish" if lang == "es" else "english"))
+    return res
+
+
+
 BUSCADORES = [_hitomi, _hentainexus, _nhentai_to, _nhentai_xxx, _nhentai_website, _3hentai, _hentai2read, _m440,
-              _hentalk, _tmohentai, _lectorhentai]
+              _hentalk, _tmohentai, _lectorhentai, _imhentai, _allporncomic, _sexkomix2]
 
 
 async def buscar(texto: str, minimo: float = 0.6, limite: int = 25) -> List[Resultado]:
@@ -322,7 +365,7 @@ _IDIOMA_HITOMI = {"spanish": "es", "english": "en", "japanese": "ja", "chinese":
                   "thai": "th", "german": "de", "italian": "it"}
 # Sitios que solo publican en un idioma
 _IDIOMA_SITIO = {"tmohentai.app": "es", "lectorhentai": "es", "m440": "es", "hentainexus": "en", "hentai2read": "en",
-                 "hentalk": "en"}
+                 "hentalk": "en", "allporncomic": "en"}
 
 BANDERA = {"es": "🇪🇸", "en": "🇬🇧", "ja": "🇯🇵", "zh": "🇨🇳", "ko": "🇰🇷", "vi": "🇻🇳", "ru": "🇷🇺", "pt": "🇧🇷",
            "fr": "🇫🇷", "id": "🇮🇩", "th": "🇹🇭", "de": "🇩🇪", "it": "🇮🇹", None: "🏳️"}
