@@ -94,7 +94,8 @@ class DiscordLogAdapter:
         self.total = 0
         self.inicio = time.time()
         self.inicio_descarga = None
-        self.errores = 0
+        self.reintentos = 0      # el servidor pidió esperar (503/429) y se repitió: normal en Hitomi
+        self.paginas_perdidas = 0  # páginas que fallaron tras todos los reintentos
         self._ultima_edicion = 0.0
         self._ultima_fase = ""
 
@@ -115,8 +116,10 @@ class DiscordLogAdapter:
                 velocidad = self.actual / max(0.1, time.time() - self.inicio_descarga)
                 restante = (self.total - self.actual) / max(velocidad, 0.01)
                 lineas.append(f"{velocidad:.1f} páginas/s · quedan ~{_fmt_tiempo(restante)}")
-        if self.errores:
-            lineas.append(f"⚠️ {self.errores} aviso(s) de descarga (se reintentan)")
+        if self.reintentos:
+            lineas.append(f"🔁 {self.reintentos} reintentos automáticos (el servidor limita la velocidad)")
+        if self.paginas_perdidas:
+            lineas.append(f"⚠️ {self.paginas_perdidas} página(s) no se pudieron descargar")
         embed.description = "\n".join(lineas)
         embed.set_footer(text=f"Pedido por {self.ctx.author.display_name}")
         return embed
@@ -172,10 +175,10 @@ class DiscordLogAdapter:
             forzar = True
         elif "[INIT]" in text or "Opening reader" in text:
             self.fase = "Abriendo la página..."
-        elif "[WARN]" in text and ("Retrying" in text or "got" in text):
-            self.errores += 1
-        elif "[ERROR]" in text:
-            self.errores += 1
+        elif "Retrying" in text:
+            self.reintentos += 1
+        elif m := re.search(r"(\d+) de \d+ páginas no se pudieron descargar", text):
+            self.paginas_perdidas = int(m.group(1))
 
         # PDF generado: "[SUCCESS] PDF Generated: file.pdf"
         if m := re.search(r"\[SUCCESS\] PDF Generated: (.*)", text):
@@ -195,11 +198,13 @@ class DiscordLogAdapter:
         duracion = _fmt_tiempo(time.time() - self.inicio)
         if ok:
             tam = sum(os.path.getsize(f) for f in self.generated_files if os.path.exists(f)) / (1024 * 1024)
-            self.fase = f"Listo en {duracion} · {self.total or '?'} páginas · {tam:.1f} MB"
+            completas = (self.total or 0) - self.paginas_perdidas
+            self.fase = f"Listo en {duracion} · {completas}/{self.total or '?'} páginas · {tam:.1f} MB"
             self.actual = self.total
-            self.errores = 0
-            await self._editar(True, color=discord.Color.green(),
-                               titulo=f"✅ Descargado: {self.titulo or 'manga'}")
+            self.reintentos = 0  # ya no importan: todo llegó (o se avisa de lo que falta)
+            color = discord.Color.green() if not self.paginas_perdidas else discord.Color.orange()
+            icono = "✅" if not self.paginas_perdidas else "⚠️"
+            await self._editar(True, color=color, titulo=f"{icono} Descargado: {self.titulo or 'manga'}")
         else:
             detalle = "\n".join(l for l in self.logs if "[ERROR]" in l or "[WARN]" in l)[-900:]
             self.fase = f"No se generó ningún PDF ({duracion})"
