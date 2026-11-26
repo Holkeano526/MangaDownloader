@@ -19,6 +19,7 @@ import os
 import asyncio
 import re
 import aiohttp
+import io
 import json
 import tempfile
 import time
@@ -28,6 +29,7 @@ from dotenv import load_dotenv
 import core
 import core.config
 import mangascan_client
+from core import busqueda
 
 load_dotenv()
 TOKEN = os.getenv('DISCORD_TOKEN')
@@ -593,10 +595,179 @@ async def descargar(ctx, url: str):
             except Exception as e:
                 await ctx.send(f"Error processing file `{filename}`: {e}")
 
+        # Autor y continuaciones en los sitios compatibles (no retrasa la entrega)
+        if logger.generated_files and logger.titulo:
+            bot.loop.create_task(informar_autor_y_continuaciones(ctx, logger.titulo, url))
+
     except Exception as e:
         await ctx.send(f"Critical error: {e}")
         import traceback
         traceback.print_exc()
+
+
+# ─── Búsqueda, autor y continuaciones ─────────────────────────────────────────
+ICONO_SITIO = {"hentainexus": "🟣", "nhentai.to": "🔴", "nhentai.xxx": "🔴", "nhentai.website": "🔴",
+               "tmohentai.app": "🟠", "lectorhentai": "🟢", "hitomi": "🔵", "3hentai": "🟡", "hentai2read": "🟤", "m440": "⚫"}
+
+
+def _linea_resultado(i: int, r: "busqueda.Resultado") -> str:
+    return f"**{i}.** [{r.titulo[:90]}]({r.url}) {ICONO_SITIO.get(r.sitio, '⚪')} `{r.sitio}`"
+
+
+COLOR_SITIO = {"hentainexus": 0x9b59b6, "nhentai.to": 0xe74c3c, "nhentai.xxx": 0xe74c3c, "nhentai.website": 0xe74c3c,
+               "tmohentai.app": 0xe67e22, "lectorhentai": 0x2ecc71, "hitomi": 0x3498db,
+               "3hentai": 0xf1c40f, "hentai2read": 0x8e5a3c, "m440": 0x34495e}
+
+
+async def _bajar_portada(session: aiohttp.ClientSession, r) -> Optional[tuple]:
+    """Descarga la portada de un resultado con el Referer de su sitio (varios servidores de
+    imágenes rechazan otro origen, así que Discord no podría cargarlas desde el enlace)."""
+    if not r.portada:
+        return None
+    from urllib.parse import urlparse
+    origen = "{0.scheme}://{0.netloc}/".format(urlparse(r.url))
+    try:
+        async with session.get(r.portada, headers={"Referer": origen}) as resp:
+            if resp.status != 200:
+                return None
+            datos = await resp.read()
+        if not datos or len(datos) > 4 * 1024 * 1024:
+            return None
+        # Formato por la firma del fichero: algunos servidores (lectorhentai) envían las WebP
+        # como application/octet-stream
+        if datos[:3] == b"\xff\xd8\xff":
+            ext = "jpg"
+        elif datos[:8] == b"\x89PNG\r\n\x1a\n":
+            ext = "png"
+        elif datos[:4] == b"RIFF" and datos[8:12] == b"WEBP":
+            ext = "webp"
+        elif datos[:4] == b"GIF8":
+            ext = "gif"
+        else:
+            return None  # no es una imagen (p. ej. una página de error)
+        return datos, ext
+    except Exception:
+        return None
+
+
+async def tarjetas_resultados(resultados, desde: int = 1):
+    """Una tarjeta (embed) por resultado con su portada como miniatura adjunta. Máx. 10 por mensaje."""
+    resultados = resultados[:10]
+    async with aiohttp.ClientSession(headers={"User-Agent": core.config.USER_AGENT},
+                                     timeout=aiohttp.ClientTimeout(total=15)) as s:
+        portadas = await asyncio.gather(*(_bajar_portada(s, r) for r in resultados))
+    embeds, archivos = [], []
+    for i, (r, portada) in enumerate(zip(resultados, portadas), start=desde):
+        e = discord.Embed(title=f"{i}. {r.titulo}"[:256], url=r.url, color=COLOR_SITIO.get(r.sitio, 0x95a5a6),
+                          description=f"{ICONO_SITIO.get(r.sitio, '⚪')} `{r.sitio}`")
+        if portada:
+            nombre = f"portada_{i}.{portada[1]}"
+            archivos.append(discord.File(io.BytesIO(portada[0]), filename=nombre))
+            e.set_thumbnail(url=f"attachment://{nombre}")
+        embeds.append(e)
+    return embeds, archivos
+
+
+class ElegirDescargaView(discord.ui.View):
+    """Menú desplegable para descargar uno de los resultados (búsqueda o continuaciones)."""
+
+    def __init__(self, ctx, resultados, placeholder: str = "Elige uno para descargarlo"):
+        super().__init__(timeout=1800)
+        self.ctx = ctx
+        self.resultados = resultados[:25]
+        menu = discord.ui.Select(
+            placeholder=placeholder,
+            options=[discord.SelectOption(label=f"{i}. {r.titulo}"[:100], value=str(i - 1),
+                                          description=r.sitio[:100])
+                     for i, r in enumerate(self.resultados, start=1)],
+        )
+        menu.callback = self._elegido
+        self.add_item(menu)
+
+    async def _elegido(self, interaction: discord.Interaction):
+        permisos = getattr(interaction.user, "guild_permissions", None)
+        if interaction.user.id != self.ctx.author.id and not (permisos and permisos.manage_messages):
+            await interaction.response.send_message("Usa tu propio !buscar para descargar.", ephemeral=True)
+            return
+        r = self.resultados[int(interaction.data["values"][0])]
+        await interaction.response.send_message(f"📥 Descargando **{r.titulo[:150]}** de `{r.sitio}`...")
+        bot.loop.create_task(self.ctx.invoke(descargar, url=r.url))
+
+
+def _titulo_para_series(titulo: str) -> str:
+    """Quita sufijos de sitio y nombres alternativos: 'Natsuzuma 3  ESPOSA DE VERANO 3  Hitomi.la' -> 'Natsuzuma 3'."""
+    t = re.sub(r"\s*(?:\|\s*)?(?:Hitomi\.la|HentaiNexus|TMOHentai|nhentai)\s*$", "", titulo or "", flags=re.I)
+    partes = [x.strip() for x in re.split(r"\s{2,}|\s\|\s", t) if x.strip()]
+    return partes[0] if partes else t.strip()
+
+
+async def informar_autor_y_continuaciones(ctx, titulo: str, url: str):
+    """Tras una descarga: autor y otras partes de la serie en los sitios compatibles."""
+    try:
+        base = _titulo_para_series(titulo)
+        autor, (siguientes, relacionadas) = await asyncio.gather(
+            busqueda.autor(url, titulo), busqueda.continuaciones(base, url))
+    except Exception as e:
+        print(f"[WARN] Autor/continuaciones: {e}")
+        return
+    if not (autor or siguientes or relacionadas):
+        return
+    embed = discord.Embed(title=f"📖 {base}"[:250], color=discord.Color.teal())
+    if autor:
+        embed.add_field(name="✍️ Autor", value=autor[:1000], inline=False)
+    lista = siguientes + relacionadas
+    if siguientes:
+        embed.add_field(name="➡️ Continuaciones encontradas",
+                        value="\n".join(_linea_resultado(i, r) for i, r in enumerate(siguientes, 1))[:1020], inline=False)
+    if relacionadas:
+        embed.add_field(name="🔗 Relacionadas",
+                        value="\n".join(_linea_resultado(i, r) for i, r in enumerate(relacionadas, len(siguientes) + 1))[:1020],
+                        inline=False)
+    if not lista:
+        embed.description = "No encontré continuaciones en los sitios compatibles."
+        await ctx.send(embed=embed)
+        return
+    # Cabecera (autor + listas) y una tarjeta con portada por cada parte encontrada (máx. 9 + cabecera)
+    tarjetas, archivos = await tarjetas_resultados(lista[:9])
+    await ctx.send(embeds=[embed] + tarjetas, files=archivos,
+                   view=ElegirDescargaView(ctx, lista, "Descargar una continuación"))
+
+
+@bot.command(name='buscar')
+async def buscar_cmd(ctx, *, texto: Optional[str] = None):
+    """
+    Busca un manga en todos los sitios compatibles.
+    Uso: !buscar <título>   (sin el número para ver todas las partes: !buscar The Wife-Lenders)
+    """
+    if not texto or len(texto.strip()) < 3:
+        await ctx.send("Uso: `!buscar <título>` (mínimo 3 letras). Sin número para ver todas las partes, "
+                       "p. ej. `!buscar The Wife-Lenders`.")
+        return
+    texto = texto.strip()
+    espera = await ctx.send(embed=discord.Embed(title=f"🔎 Buscando «{texto[:200]}»...",
+                                                description="Hitomi · hentainexus · nhentai (to, xxx, website) · 3hentai · "
+                                                            "hentai2read · m440 · tmohentai · lectorhentai",
+                                                color=discord.Color.blue()))
+    t0 = time.time()
+    resultados = await busqueda.buscar(texto)
+    embed = discord.Embed(title=f"🔎 «{texto[:200]}»", color=discord.Color.blue())
+    if not resultados:
+        embed.description = "Sin resultados en los sitios compatibles. Prueba con menos palabras o el título en romaji."
+        await espera.edit(embed=embed)
+        return
+    mostrados = resultados[:15]
+    sitios = sorted({r.sitio for r in resultados})
+    tarjetas, archivos = await tarjetas_resultados(mostrados[:10])
+    cabecera = (f"🔎 **«{texto[:200]}»** · {len(resultados)} resultado(s) en {len(sitios)} sitio(s) · "
+                f"{time.time() - t0:.1f}s")
+    if len(mostrados) > 10:  # Discord admite 10 tarjetas por mensaje: el resto, como líneas
+        cabecera += "\n" + "\n".join(_linea_resultado(i, r) for i, r in enumerate(mostrados[10:], 11))
+    try:
+        await espera.delete()
+    except discord.errors.HTTPException:
+        pass
+    await ctx.send(content=cabecera[:2000], embeds=tarjetas, files=archivos, view=ElegirDescargaView(ctx, mostrados))
+
 
 @bot.command(name='traducir')
 async def traducir(ctx, *, enlace: Optional[str] = None):  # '*': el nombre puede tener espacios

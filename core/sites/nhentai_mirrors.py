@@ -19,6 +19,7 @@ Visto el 25/11/2026:
   nhentai.to       /g/<id>      supercdn.site/galleries/<media>/<n>t.jpg -> <n>.jpg
   nhentai.xxx      /g/<id>/     i5.nhentaimg.com/<dir>/<hash>/<n>t.jpg   -> <n>.webp
   nhentai.website  /read/<id>   t1.nhentai.jp.net/g/<media>/<n>x.webp    -> (lector)
+  3hentai.net      /d/<id>      s1.3hentai.net/d<media>/<n>t.jpg         -> <n>.jpg  (mismo frontend)
 
 Los mirrors con desafío de Cloudflare (p. ej. nhentai.top) no se intentan saltar: se
 avisa con un mensaje claro. nhentai.net sigue en su handler propio (nhentai.py).
@@ -47,11 +48,12 @@ def _es_cloudflare(status: int, cuerpo: str) -> bool:
 
 
 class NHentaiMirrorHandler(BaseSiteHandler):
-    """Cualquier dominio "nhentai.*" salvo nhentai.net (ese tiene su propio handler)."""
+    """Cualquier dominio "nhentai.*" (salvo nhentai.net, que tiene su propio handler) y clones
+    con el mismo frontend aunque se llamen distinto, como 3hentai.net."""
 
     @staticmethod
     def get_supported_domains() -> list:
-        return ["nhentai"]
+        return ["nhentai", "3hentai"]
 
     async def process(
         self,
@@ -62,10 +64,10 @@ class NHentaiMirrorHandler(BaseSiteHandler):
     ) -> None:
         p = urlparse(url)
         origen = f"{p.scheme or 'https'}://{p.netloc}"
-        m = re.search(r"/(g|read)/(\d+)", p.path)
+        m = re.search(r"/(g|read|d)/(\d+)", p.path)
         if not m:
             log_callback(f"[ERROR] Esa URL no es una galería. Pásame el enlace de un manga de {p.netloc} "
-                         f"(del tipo {origen}/g/123456/ o {origen}/read/123456).")
+                         f"(del tipo {origen}/g/123456/, /read/123456 o /d/123456).")
             return
         ruta, gid = m.group(1), m.group(2)
         ficha_url = f"{origen}/{ruta}/{gid}" + ("/" if url.rstrip().endswith("/") or ruta == "g" else "")
@@ -158,7 +160,11 @@ class NHentaiMirrorHandler(BaseSiteHandler):
             async with sem:
                 try:
                     async with s.head(u, allow_redirects=True) as r:
-                        return r.status == 200 and r.content_type.startswith("image/")
+                        if r.status != 200 or not r.content_type.startswith("image/"):
+                            return False
+                        # 3hentai responde "200 image/png" con 0 bytes para páginas que NO existen
+                        largo = r.headers.get("Content-Length")
+                        return largo is None or int(largo) > 0
                 except aiohttp.ClientError:
                     return False
 
@@ -175,14 +181,30 @@ class NHentaiMirrorHandler(BaseSiteHandler):
                     return e
             return None
 
-        # Total real. Atajo: si la ficha muestra todas las miniaturas, la siguiente no existe
-        # y basta 1 comprobación (nhentai.to). Si existe, potencias de 2 y búsqueda binaria.
+        # Total real.
+        # 1) Si la ficha dice cuántas páginas tiene ("36 pages", "Pages: 50") y la última existe, vale.
+        texto_ficha = re.sub(r"<[^>]+>", " ", ficha)
+        m_pag = re.search(r"\b(\d{1,4})\s+(?:pages|páginas|paginas)\b", texto_ficha, re.I) or \
+            re.search(r"(?:pages|páginas|paginas)\s*:?\s*(\d{1,4})\b", texto_ficha, re.I)
+        if m_pag:
+            declaradas = int(m_pag.group(1))
+            if declaradas >= max(minis) and await ext_de(declaradas):
+                log_callback(f"[INFO] {declaradas} páginas (según la ficha).")
+                return titulo, await self._urls(declaradas, prefijo, preferida, minis, mismo_formato, ext_de, imagen_de_pagina)
+        # 2) Atajo: si la ficha muestra todas las miniaturas, la siguiente no existe y basta
+        #    1 comprobación (nhentai.to). Si existe, potencias de 2 y búsqueda binaria.
         bajo = max(minis)
         if await ext_de(bajo) and not await ext_de(bajo + 1):
             log_callback(f"[INFO] {bajo} páginas (todas las miniaturas visibles).")
             return titulo, await self._urls(bajo, prefijo, preferida, minis, mismo_formato, ext_de, imagen_de_pagina)
         if not await ext_de(bajo):
             bajo = 1
+        # 3) Seguro: si el servidor dice que existe una página absurda, miente para todas y la
+        #    búsqueda no sirve (3hentai con .png/.webp: 4608 "páginas" en vez de 36). Solo las visibles.
+        if await ext_de(99999):
+            log_callback(f"[WARN] El servidor de imágenes responde OK a páginas inexistentes: "
+                         f"se usan las {max(minis)} páginas visibles.")
+            return titulo, await self._urls(max(minis), prefijo, preferida, minis, mismo_formato, ext_de, imagen_de_pagina)
         saltos = [bajo * (2 ** k) for k in range(1, 8)]  # hasta x128
         existen = await asyncio.gather(*(ext_de(n) for n in saltos))
         alto = next((n for n, e in zip(saltos, existen) if not e), saltos[-1] + 1)

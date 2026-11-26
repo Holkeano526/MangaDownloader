@@ -1,79 +1,96 @@
+"""
+Hentai2Read — descarga por HTTP (rehecho el 25/11/2026).
 
+El sitio pasó a ser una app Inertia.js: los datos de cada página van en JSON dentro de
+<script data-page="app" type="application/json">{"component": ..., "props": {...}}</script>.
+El handler antiguo buscaba "var gData" del sitio anterior y ya no encontraba nada.
+
+  Ficha  : /<tipo>/<id>-<slug>             props.book (título, grupos: artista...), props.chapters
+  Lector : /reader/<id>-<slug>/<cap>/page-1 props.images = [URL de cada página] (hentaicdn.com)
+  Buscar : /search?q=<texto>               props.books.data (título, url, portada, artista)
+
+Si la ficha tiene varios capítulos, se devuelve la lista de URLs de lector y el bot los encola
+uno a uno (igual que las series de otros sitios). Con un solo capítulo se descarga directamente.
 """
-Hentai2Read site handler.
-"""
+import json
 import re
-from typing import Callable, Optional
-from crawl4ai import AsyncWebCrawler
+from typing import Callable, List, Optional
+
+import aiohttp
 
 from .base import BaseSiteHandler
 from .. import config
-from ..utils import download_and_make_pdf, clean_filename
+from ..utils import clean_filename, download_and_make_pdf
+
+WEB = "https://hentai2read.com"
+
+
+def datos_pagina(html_txt: str) -> dict:
+    """El JSON de Inertia de una página de Hentai2Read ({} si no está)."""
+    m = re.search(r'<script[^>]*data-page="app"[^>]*>(.*?)</script>', html_txt, re.S)
+    if not m:
+        return {}
+    try:
+        return json.loads(m.group(1))
+    except ValueError:
+        return {}
 
 
 class H2RHandler(BaseSiteHandler):
-    """Handler for Hentai2Read website."""
-    
+    """Handler para hentai2read.com."""
+
     @staticmethod
     def get_supported_domains() -> list:
         return ["hentai2read"]
-    
+
     async def process(
         self,
         url: str,
         log_callback: Callable[[str], None],
         check_cancel: Callable[[], bool],
-        progress_callback: Optional[Callable[[int, int], None]] = None
-    ) -> None:
-        """Process Hentai2Read URL."""
+        progress_callback: Optional[Callable[[int, int], None]] = None,
+    ) -> Optional[List[str]]:
         log_callback("[INIT] Processing Hentai2Read...")
-        
-        async with AsyncWebCrawler(verbose=True) as crawler:
-            result = await crawler.arun(url=url, bypass_cache=True)
-            if not result.success:
-                log_callback(f"[ERROR] Page load failed: {result.error_message}")
-                return
-                
-            html = result.html
-            
-            # Extract gData JSON variable
-            gdata_match = re.search(r'var gData\s*=\s*(\{.*?\});', html, re.DOTALL)
-            
-            if gdata_match:
-                try:
-                    json_str = gdata_match.group(1)
-                    images_match = re.search(r'[\'"]images[\'"]\s*:\s*\[(.*?)\]', json_str, re.DOTALL)
-                    if images_match:
-                        img_list_raw = images_match.group(1)
-                        raw_paths = re.findall(r'["\']([^"\']+)["\']', img_list_raw)
-                        paths = [p.replace('\\/', '/') for p in raw_paths]
-                        
-                        base_url = "https://static.hentai.direct/hentai"
-                        cdn_match = re.search(r'src=["\'](https://[^"/]+/hentai)/', html)
-                        if cdn_match: 
-                            base_url = cdn_match.group(1)
-                        
-                        image_urls = [f"{base_url}{p}" if not p.startswith("http") else p for p in paths]
-                        log_callback(f"[INFO] Found {len(image_urls)} images.")
-                        
-                        pdf_name = "hentai2read_chapter.pdf"
-                        title_match = re.search(r'[\'"]title[\'"]\s*:\s*[\'"](.*?)[\'"]', json_str)
-                        if title_match:
-                            safe = clean_filename(title_match.group(1).strip())
-                            pdf_name = f"{safe}.pdf"
-                        
-                        await download_and_make_pdf(
-                            image_urls,
-                            pdf_name,
-                            config.HEADERS_H2R,
-                            log_callback,
-                            check_cancel,
-                            progress_callback=progress_callback,
-                            open_result=config.OPEN_RESULT_ON_FINISH
-                        )
-                    else:
-                        log_callback("[ERROR] Could not extract image list.")
-                except Exception as e:
-                    log_callback(f"[ERROR] Error processing metadata: {e}")
-            else:
-                log_callback("[ERROR] Chapter data not found.")
+        headers = {"User-Agent": config.USER_AGENT, "Referer": f"{WEB}/"}
+        async with aiohttp.ClientSession(headers=headers, timeout=aiohttp.ClientTimeout(total=30)) as s:
+            async with s.get(url, allow_redirects=True) as r:
+                if r.status != 200:
+                    log_callback(f"[ERROR] Hentai2Read respondió {r.status}.")
+                    return None
+                pagina = await r.text()
+        datos = datos_pagina(pagina)
+        props = datos.get("props") or {}
+        componente = datos.get("component", "")
+
+        if componente.startswith("Book"):  # ficha
+            caps = props.get("chapters") or []
+            urls = [f"{WEB}{c['url']}" for c in caps if c.get("url")]
+            if not urls and (props.get("read") or {}).get("url"):
+                urls = [f"{WEB}{props['read']['url']}"]
+            if len(urls) > 1:
+                log_callback(f"[INFO] Serie con {len(urls)} capítulos.")
+                return list(reversed(urls))  # el sitio los lista del más nuevo al más antiguo
+            if not urls:
+                log_callback("[ERROR] La ficha de Hentai2Read no tiene capítulos.")
+                return None
+            return await self.process(urls[0], log_callback, check_cancel, progress_callback)
+
+        imagenes = props.get("images") or []
+        if not imagenes:
+            log_callback("[ERROR] No encontré imágenes en el lector de Hentai2Read (¿formato nuevo?).")
+            return None
+        libro = props.get("book") or {}
+        capitulo = props.get("chapter") or {}
+        titulo = capitulo.get("title") or libro.get("title") or "hentai2read"
+        log_callback(f"[INFO] Title detected: {titulo}")
+        log_callback(f"[INFO] Images detected: {len(imagenes)}")
+        await download_and_make_pdf(
+            imagenes,
+            f"{clean_filename(titulo)}.pdf",
+            headers,
+            log_callback,
+            check_cancel,
+            progress_callback=progress_callback,
+            open_result=config.OPEN_RESULT_ON_FINISH,
+        )
+        return None
