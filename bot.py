@@ -31,6 +31,8 @@ import core.config
 import mangascan_client
 from core import busqueda
 from core import agrupador
+from core.handler import obra_desde_enlace
+from urllib.parse import urlparse
 
 load_dotenv()
 TOKEN = os.getenv('DISCORD_TOKEN')
@@ -555,6 +557,13 @@ async def descargar(ctx, url: str):
         await ctx.send("Please provide a URL.")
         return
 
+    # chochox/vercomicsporno bloquean la descarga automática (Cloudflare): no se les pide nada;
+    # se busca la misma obra, por el título del enlace, en los sitios compatibles.
+    obra = obra_desde_enlace(url)
+    if obra:
+        await alternativas_sitio_bloqueado(ctx, url, *obra)
+        return
+
     logger = DiscordLogAdapter(ctx, url)
     if download_semaphore.locked():
         logger.fase = "En cola (hay 3 descargas en marcha)..."
@@ -850,6 +859,46 @@ async def informar_autor_y_continuaciones(ctx, titulo: str, url: str):
                    view=ElegirDescargaView(ctx, lista, "Descargar una continuación"))
 
 
+async def alternativas_sitio_bloqueado(ctx, url: str, texto: str, artista: Optional[str], completo: str):
+    """Enlace de un sitio que bloquea la descarga automática: avisa y ofrece la misma obra en los
+    sitios compatibles (series agrupadas o, si no se puede, la lista paginada de !buscar)."""
+    host = urlparse(url).netloc.lower().removeprefix("www.")
+    motivo = "Tiene un desafío anti-bots de Cloudflare en todas sus páginas y no se intenta saltar.\n"
+    aviso = discord.Embed(
+        title=f"🚫 {host} bloquea la descarga automática",
+        description=(motivo + f"Busco la misma obra en los sitios compatibles: **{texto[:150]}**"
+                     + (f" · ✍️ {artista[:60]}" if artista else "") + " ..."),
+        color=discord.Color.orange())
+    mensaje = await ctx.send(embed=aviso)
+    t0 = time.time()
+    series, todos = None, []
+    try:
+        series, todos, artista = await agrupador.series_para(texto, artista=artista)
+        # Si no sale nada: el artista adivinado puede ser parte del título (slug entero) y algunos
+        # buscadores no casan con el número de parte ("alicia goes wonderland 2" -> sin el 2).
+        sin_numero = re.sub(r"\s+\d+(?:\.\d+)?$", "", texto).strip()
+        for otra in (completo, sin_numero):
+            if todos or not otra or otra == texto:
+                continue
+            series, todos, artista = await agrupador.series_para(otra, artista=artista)
+    except Exception as e:
+        print(f"[WARN] Alternativas para {host}: {e}")
+
+    if not todos:
+        aviso.description = (motivo + f"No encontré **{texto[:150]}** en los sitios compatibles. Prueba `!buscar` con otras "
+                             f"palabras, o descárgalo desde el navegador y usa `!traducir` con el PDF adjunto.")
+        await mensaje.edit(embed=aviso)
+        return
+    aviso.description = (motivo + f"La misma obra en los sitios compatibles (búsqueda: **{texto[:150]}**):")
+    await mensaje.edit(embed=aviso)
+    if series:
+        await enviar_series(ctx, ctx, texto, series, todos, time.time() - t0)
+        return
+    vista = ResultadosPaginadosView(ctx, texto, busqueda.ordenar_por_idioma(todos), time.time() - t0)
+    contenido, tarjetas, archivos = await vista.pagina_actual()
+    vista.mensaje = await ctx.send(content=contenido, embeds=tarjetas, files=archivos, view=vista)
+
+
 @bot.command(name='buscar')
 async def buscar_cmd(ctx, *, texto: Optional[str] = None):
     """
@@ -863,7 +912,8 @@ async def buscar_cmd(ctx, *, texto: Optional[str] = None):
     texto = texto.strip()
     espera = await ctx.send(embed=discord.Embed(title=f"🔎 Buscando «{texto[:200]}»...",
                                                 description="Hitomi · hentainexus · nhentai (to, xxx, website) · 3hentai · "
-                                                            "hentai2read · m440 · hentalk · tmohentai · lectorhentai",
+                                                            "hentai2read · m440 · hentalk · tmohentai · lectorhentai · "
+                                                            "imhentai · allporncomic · sexkomix2",
                                                 color=discord.Color.blue()))
     t0 = time.time()
     resultados = busqueda.ordenar_por_idioma(await busqueda.buscar(texto, limite=50))

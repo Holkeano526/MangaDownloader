@@ -108,7 +108,9 @@ def _normalizar_completo(t: str) -> str:
 # (por detrás de los que sí casan por título). lectorhentai busca palabra a palabra y tmohentai
 # casa también palabras traducidas ("wife" -> "Mi Esposa Gyaru"): meten ruido y no se rescatan.
 # hentai2read casa por título alternativo ("natsuzuma" -> "Summer Wife ..."): sí se rescata.
-ESTRICTOS = {"hitomi", "hentainexus", "nhentai.to", "nhentai.xxx", "nhentai.website", "3hentai", "hentai2read", "m440",
+# 3hentai NO es estricto: con una búsqueda sin coincidencias devuelve igualmente 25 galerías
+# (comprobado con "zzqqxxnotexist"), que se colaban como si casaran por artista.
+ESTRICTOS = {"hitomi", "hentainexus", "nhentai.to", "nhentai.xxx", "nhentai.website", "hentai2read", "m440",
              "hentalk", "imhentai", "allporncomic"}
 PUNTUACION_POR_ETIQUETA = 0.6
 
