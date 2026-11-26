@@ -612,9 +612,9 @@ async def descargar(ctx, url: str):
             except Exception as e:
                 await ctx.send(f"Error processing file `{filename}`: {e}")
 
-        # Autor y continuaciones en los sitios compatibles (no retrasa la entrega)
+        # Autor y botones «Buscar continuación» / «Más obras del autor» (solo se busca si los pulsas)
         if logger.generated_files and logger.titulo:
-            bot.loop.create_task(informar_autor_y_continuaciones(ctx, logger.titulo, url))
+            bot.loop.create_task(ofrecer_continuacion(ctx, logger.titulo, url))
 
     except Exception as e:
         await ctx.send(f"Critical error: {e}")
@@ -782,6 +782,23 @@ class SeriesView(discord.ui.View):
                                       style=discord.ButtonStyle.secondary, row=1)
             boton.callback = self._ver_todos
             self.add_item(boton)
+        # «Más obras de <artista>» (hasta 2 artistas distintos de las series mostradas)
+        artistas = []
+        for serie in series:
+            a = (serie.artista or "").split(",")[0].strip()
+            if a and a.lower() not in (x.lower() for x in artistas):
+                artistas.append(a)
+        for a in artistas[:2]:
+            boton = discord.ui.Button(label=f"✍️ Más obras de {a}"[:80], style=discord.ButtonStyle.secondary, row=1)
+            boton.callback = lambda i, a=a: self._autor(i, a)
+            self.add_item(boton)
+
+    async def _autor(self, interaction: discord.Interaction, autor: str):
+        if not self._permitido(interaction):
+            await interaction.response.send_message("Usa tu propio !buscar.", ephemeral=True)
+            return
+        await interaction.response.send_message(f"✍️ Buscando obras de **{autor[:100]}**...")
+        bot.loop.create_task(buscar_obras_autor(self.ctx, autor))
 
     def _permitido(self, interaction) -> bool:
         permisos = getattr(interaction.user, "guild_permissions", None)
@@ -827,35 +844,38 @@ async def enviar_series(destino, ctx, texto: str, series, todos, segundos: float
     return await destino.send(content=contenido[:2000], embeds=embeds, files=archivos, view=vista)
 
 
-async def informar_autor_y_continuaciones(ctx, titulo: str, url: str):
-    """Tras una descarga: autor y otras partes de la serie en los sitios compatibles.
-    Primero intenta agrupar con DeepSeek (series > partes > fuentes); si no puede, usa la
-    detección por número de parte."""
+def _permitido(ctx, interaction) -> bool:
+    """Solo quien lanzó el comando (o un moderador) usa los botones y menús de su mensaje."""
+    permisos = getattr(interaction.user, "guild_permissions", None)
+    return interaction.user.id == ctx.author.id or bool(permisos and permisos.manage_messages)
+
+
+async def buscar_continuacion(ctx, titulo: str, url: str = ""):
+    """Otras partes de la serie de una obra, en los sitios compatibles. Solo busca por el título
+    (sin las obras del artista: eso es el botón «Más obras del autor»). Primero agrupa con DeepSeek
+    (series > partes > fuentes); si no puede, usa la detección por número de parte."""
+    base = _titulo_para_series(titulo)
+    t0 = time.time()
     try:
-        base = _titulo_para_series(titulo)
-        t0 = time.time()
-        autor = await busqueda.autor(url, titulo)
-        series, todos, _ = await agrupador.series_para(base, actual=titulo,
-                                                       artista=(autor or "").split(",")[0].strip() or None)
+        series, todos, _ = await agrupador.series_para(base, actual=titulo)
         if series:
             # Si bajaste "1-3", no ofrecer otra vez la 1, la 2 ni la 3: solo lo posterior
             series, hasta = agrupador.solo_posteriores(series, url, titulo)
             await enviar_series(ctx, ctx, base, series, todos, time.time() - t0, actual_url=url, hasta=hasta)
             return
     except Exception as e:
-        print(f"[WARN] Agrupar series tras descarga: {e}")
+        print(f"[WARN] Agrupar series (continuación): {e}")
     try:
-        autor, (siguientes, relacionadas) = await asyncio.gather(
-            busqueda.autor(url, titulo), busqueda.continuaciones(base, url))
+        siguientes, relacionadas = await busqueda.continuaciones(base, url)
     except Exception as e:
-        print(f"[WARN] Autor/continuaciones: {e}")
-        return
-    if not (autor or siguientes or relacionadas):
-        return
-    embed = discord.Embed(title=f"📖 {base}"[:250], color=discord.Color.teal())
-    if autor:
-        embed.add_field(name="✍️ Autor", value=autor[:1000], inline=False)
+        print(f"[WARN] Continuaciones: {e}")
+        siguientes, relacionadas = [], []
+    embed = discord.Embed(title=f"🔎 Continuación de {base}"[:250], color=discord.Color.teal())
     lista = siguientes + relacionadas
+    if not lista:
+        embed.description = "No encontré continuaciones en los sitios compatibles."
+        await ctx.send(embed=embed)
+        return
     if siguientes:
         embed.add_field(name="➡️ Continuaciones encontradas",
                         value="\n".join(_linea_resultado(i, r) for i, r in enumerate(siguientes, 1))[:1020], inline=False)
@@ -863,14 +883,76 @@ async def informar_autor_y_continuaciones(ctx, titulo: str, url: str):
         embed.add_field(name="🔗 Relacionadas",
                         value="\n".join(_linea_resultado(i, r) for i, r in enumerate(relacionadas, len(siguientes) + 1))[:1020],
                         inline=False)
-    if not lista:
-        embed.description = "No encontré continuaciones en los sitios compatibles."
-        await ctx.send(embed=embed)
-        return
-    # Cabecera (autor + listas) y una tarjeta con portada por cada parte encontrada (máx. 9 + cabecera)
+    # Cabecera y una tarjeta con portada por cada parte encontrada (máx. 9 + cabecera)
     tarjetas, archivos = await tarjetas_resultados(lista[:9])
     await ctx.send(embeds=[embed] + tarjetas, files=archivos,
                    view=ElegirDescargaView(ctx, lista, "Descargar una continuación"))
+
+
+async def buscar_obras_autor(ctx, autor: str, url_actual: str = ""):
+    """Todas las obras de un autor en los sitios compatibles (lista paginada de tarjetas)."""
+    t0 = time.time()
+    resultados = [r for r in await busqueda.buscar(autor, limite=50)
+                  if not url_actual or r.url.rstrip("/") != url_actual.rstrip("/")]
+    if not resultados:
+        await ctx.send(embed=discord.Embed(title=f"✍️ {autor[:200]}",
+                                           description="No encontré más obras suyas en los sitios compatibles.",
+                                           color=discord.Color.orange()))
+        return
+    vista = ResultadosPaginadosView(ctx, f"✍️ {autor}", busqueda.ordenar_por_idioma(resultados), time.time() - t0)
+    contenido, tarjetas, archivos = await vista.pagina_actual()
+    vista.mensaje = await ctx.send(content=contenido, embeds=tarjetas, files=archivos, view=vista)
+
+
+async def autor_de(r) -> Optional[str]:
+    """Autor de un resultado: el que trajo la búsqueda por código o el de su ficha/título."""
+    if r.extra.get("artistas"):
+        return r.extra["artistas"][0]
+    a = await busqueda.autor(r.url, r.titulo)
+    return a.split(",")[0].strip() if a else None
+
+
+class AccionesObraView(discord.ui.View):
+    """Tras una descarga: botones para buscar la continuación y más obras del autor."""
+
+    def __init__(self, ctx, titulo: str, url: str, autor: Optional[str]):
+        super().__init__(timeout=1800)
+        self.ctx, self.titulo, self.url, self.autor = ctx, titulo, url, autor
+        b = discord.ui.Button(label="🔎 Buscar continuación", style=discord.ButtonStyle.primary)
+        b.callback = self._continuacion
+        self.add_item(b)
+        if autor:
+            b = discord.ui.Button(label=f"✍️ Más obras de {autor}"[:80], style=discord.ButtonStyle.secondary)
+            b.callback = self._autor
+            self.add_item(b)
+
+    async def _continuacion(self, interaction: discord.Interaction):
+        if not _permitido(self.ctx, interaction):
+            await interaction.response.send_message("Descarga tú la obra para buscar su continuación.", ephemeral=True)
+            return
+        await interaction.response.send_message(f"🔎 Buscando la continuación de **{_titulo_para_series(self.titulo)[:150]}**...")
+        bot.loop.create_task(buscar_continuacion(self.ctx, self.titulo, self.url))
+
+    async def _autor(self, interaction: discord.Interaction):
+        if not _permitido(self.ctx, interaction):
+            await interaction.response.send_message("Usa tu propio !buscar.", ephemeral=True)
+            return
+        await interaction.response.send_message(f"✍️ Buscando obras de **{self.autor[:100]}**...")
+        bot.loop.create_task(buscar_obras_autor(self.ctx, self.autor, self.url))
+
+
+async def ofrecer_continuacion(ctx, titulo: str, url: str):
+    """Tras una descarga: autor de la obra y botones. No busca nada más hasta que se pulsan."""
+    try:
+        autor = await busqueda.autor(url, titulo)
+    except Exception as e:
+        print(f"[WARN] Autor: {e}")
+        autor = None
+    autor = autor.split(",")[0].strip() if autor else None
+    embed = discord.Embed(title=f"📖 {_titulo_para_series(titulo)}"[:250], color=discord.Color.teal())
+    if autor:
+        embed.description = f"✍️ {autor[:200]}"
+    await ctx.send(embed=embed, view=AccionesObraView(ctx, titulo, url, autor))
 
 
 async def alternativas_sitio_bloqueado(ctx, url: str, texto: str, artista: Optional[str], completo: str):
@@ -971,17 +1053,10 @@ async def buscar_cmd(ctx, *, texto: Optional[str] = None):
         await espera.edit(embed=embed)
         return
 
-    # Agrupar en series y partes: más obras del artista + DeepSeek. Si falla, lista paginada.
+    # Agrupar en series y partes con DeepSeek (solo lo encontrado por el título: las obras del
+    # artista se piden aparte con «Más obras del autor»). Si falla, lista paginada.
     try:
-        artista = agrupador.artista_probable(resultados)
         todos = list(resultados)
-        if artista and busqueda.normalizar(artista) not in busqueda.normalizar(texto):
-            await espera.edit(embed=discord.Embed(
-                title=f"📚 Buscando más obras de {artista[:100]}...",
-                description=f"{len(resultados)} resultado(s) por título. Las series suelen tener títulos distintos "
-                            f"en cada parte: se buscan todas las obras del artista.", color=discord.Color.blue()))
-            urls = {r.url for r in todos}
-            todos += [r for r in await busqueda.buscar(artista, limite=50) if r.url not in urls]
         await espera.edit(embed=discord.Embed(title="🤖 Agrupando por series y partes...",
                                               description=f"{len(todos)} resultado(s) · DeepSeek",
                                               color=discord.Color.blue()))
@@ -1037,6 +1112,17 @@ class ResultadosPaginadosView(discord.ui.View):
         )
         menu.callback = self._elegido
         self.add_item(menu)
+        for fila, (texto, callback) in enumerate((("🔎 Buscar continuación de…", self._continuacion),
+                                                 ("✍️ Más obras del autor de…", self._autor)), start=2):
+            extra = discord.ui.Select(
+                placeholder=texto,
+                options=[discord.SelectOption(label=f"{i}. {r.titulo}"[:100], value=str(i - 1),
+                                              description=r.sitio[:100])
+                         for i, r in enumerate(self._de_la_pagina(), start=inicio + 1)],
+                row=fila,
+            )
+            extra.callback = callback
+            self.add_item(extra)
         if self.paginas > 1:
             anterior = discord.ui.Button(label="◀ Anterior", style=discord.ButtonStyle.secondary,
                                          disabled=self.pagina == 0, row=1)
@@ -1082,6 +1168,29 @@ class ResultadosPaginadosView(discord.ui.View):
         r = self.resultados[int(interaction.data["values"][0])]
         await interaction.response.send_message(f"📥 Descargando **{r.titulo[:150]}** de `{r.sitio}`...")
         bot.loop.create_task(self.ctx.invoke(descargar, url=r.url))
+
+    async def _continuacion(self, interaction: discord.Interaction):
+        if not self._permitido(interaction):
+            await interaction.response.send_message("Usa tu propio !buscar.", ephemeral=True)
+            return
+        r = self.resultados[int(interaction.data["values"][0])]
+        await interaction.response.send_message(f"🔎 Buscando la continuación de **{_titulo_para_series(r.titulo)[:150]}**...")
+        bot.loop.create_task(buscar_continuacion(self.ctx, r.titulo, r.url))
+
+    async def _autor(self, interaction: discord.Interaction):
+        if not self._permitido(interaction):
+            await interaction.response.send_message("Usa tu propio !buscar.", ephemeral=True)
+            return
+        r = self.resultados[int(interaction.data["values"][0])]
+        await interaction.response.send_message(f"✍️ Buscando el autor de **{r.titulo[:150]}**...")
+
+        async def seguir():
+            autor = await autor_de(r)
+            if not autor:
+                await self.ctx.send(f"No encontré el autor de **{r.titulo[:150]}**.")
+                return
+            await buscar_obras_autor(self.ctx, autor, r.url)
+        bot.loop.create_task(seguir())
 
 
 @bot.command(name='traducir')
