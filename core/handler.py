@@ -7,37 +7,28 @@ the appropriate site-specific handler (e.g., TMO, Hitomi, NHentai).
 
 from typing import Callable, Optional
 from .sites import (
-    TMOHandler, 
-    M440Handler, 
-    H2RHandler, 
-    HitomiHandler, 
-    NHentaiHandler, 
-    ZonaTMOHandler,
-    FakkuHandler,
-    HentalkHandler,
-    ShadeMangaHandler,
     TMOHentaiAppHandler,
     LectorHentaiHandler,
     HentaiNexusHandler,
+    HitomiHandler,
     NHentaiMirrorHandler,
+    H2RHandler,
+    M440Handler,
+    HentalkHandler,
+    ShadeMangaHandler,
 )
 
-# Instantiate handlers (Stateless approach)
+# Instantiate handlers (stateless). Gana el primero cuyo dominio aparezca en la URL.
 HANDLERS = [
-    # tmohentai.app antes que TMOHandler: este último coincide con cualquier "tmohentai"
     TMOHentaiAppHandler(),
     LectorHentaiHandler(),
     HentaiNexusHandler(),
-    TMOHandler(),
-    M440Handler(),
-    H2RHandler(),
     HitomiHandler(),
-    NHentaiHandler(),
-    NHentaiMirrorHandler(),  # resto de dominios nhentai.* (to, xxx, website...)
-    ZonaTMOHandler(),
-    FakkuHandler(),
-    HentalkHandler(),
-    ShadeMangaHandler()
+    NHentaiMirrorHandler(),  # nhentai.* (to, xxx, website, net, top...) y 3hentai.net
+    H2RHandler(),
+    M440Handler(),
+    HentalkHandler(),        # hentalk.pw y los enlaces viejos de fakku.cc (mismo servidor)
+    ShadeMangaHandler(),
 ]
 
 from urllib.parse import urlparse

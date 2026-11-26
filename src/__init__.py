@@ -1,1 +1,0 @@
-# Manga Downloader - src package

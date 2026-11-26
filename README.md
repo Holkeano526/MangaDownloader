@@ -1,139 +1,137 @@
-# Universal Manga PDF Downloader
+# MangaDownloader
 
-A powerful tool to automate manga downloads from popular sites and convert them into high-quality PDFs. Built with a robust **Next.js Web Interface** and a **Python Modular Core**.
+Descarga mangas y doujinshi de **11 sitios** a PDF, **busca en todos a la vez**, agrupa las partes de una
+serie con IA (DeepSeek) y, con un botón, **los traduce** con [MangaScan AI](https://github.com/Holkeano526/mangascan).
 
-![Python](https://img.shields.io/badge/Python-3.10%2B-blue)
-![FastAPI](https://img.shields.io/badge/FastAPI-0.95%2B-009688)
-![Next.js](https://img.shields.io/badge/Next.js-15-black)
-![Playwright](https://img.shields.io/badge/Playwright-Automation-orange)
+Se usa sobre todo como **bot de Discord** (corre en un NAS con Docker), pero el mismo núcleo (`core/`) sirve
+también a una interfaz web (Next.js + FastAPI) y a una app de escritorio (Tkinter).
 
-## ✨ New Features & Technologies
+## Cómo funciona
 
-### 🚀 Performance & Stability (New)
-- **High-Concurrency Downloads**: Utilizes `asyncio.Semaphore` to parallelize image downloads without triggering rate limits (429 Too Many Requests).
-- **Thread-Safe UI & Background Tasks**: Resolves race conditions in the Tkinter Desktop app using Python's thread-safe `queue.Queue` and offloads CPU-bound PDF generation to `asyncio.to_thread`.
-- **Memory & Cache Optimization**: Prevents memory leaks in the FastAPI server by automatically pruning old WebSocket task history, and uses O(1) caching for rapid Discord Bot file lookups.
-- **Cross-Platform Readiness**: File handling and execution gracefully adapt to Windows, macOS, and Headless Linux environments (Docker).
-- **Connection Pooling**: Implements reusable `aiohttp` HTTP sessions with Keep-Alive to drastically reduce connection overhead.
+<p align="center">
+  <img src="docs/flujo_app.drawio.svg" alt="Flujo de MangaDownloader" width="100%">
+</p>
 
-### ⚡ Recent Updates (Latest Release)
-- **GoFile V2 API Support**: Upgraded the Discord bot to support GoFile's new required authentication. Automatically generates guest accounts, creates public folders for Discord shareability, and dynamically sanitizes Unicode characters to bypass internal GoFile `500` crashes.
-- **Optimized PDF Compilation**: Massively reduced generated PDF file sizes (fixing 1GB+ issues) by intelligently compressing raw image streams via optimal JPEG encoding without perceptible loss in manga quality.
-- **NAS & Docker Reliability**: Implemented `/health` endpoints in the FastAPI backend for robust container orchestration and automated restarts.
-- **RFC 5987 Unicode Support**: Fully supports downloading mangas with Japanese, Korean, and Chinese titles correctly through the web interface without HTTP header encode errors.
-- **Hentalk.pw Integration**: Added `HentalkHandler` supporting extremely fast SvelteKit JSON data extraction and Playwright Cloudflare bypass for high-quality downloads.
-- **Hitomi.la Batch Optimization & Stability**: Completely refactored `HitomiHandler` to extract image URLs in batch directly via Javascript injection, skipping slow page-by-page rendering. Implemented native Hitomi load-balancing support (`w1`, `w2`, etc.), intelligent retry mechanisms (Exponential Backoff), and reduced concurrent connections to prevent `503 Service Unavailable` bans and IP blocks.
-- **Dynamic Domain Loading**: Improved the legacy Tkinter app (`app.py`) to dynamically fetch and register supported domains directly from `core.handler.HANDLERS`, eliminating the need to update hardcoded lists when adding new sites.
-- **Extensibility Guide**: Created `HOW_TO_ADD_SITES.md` documenting best practices for AI agents and developers adding new web scrapers using Playwright and Crawl4AI.
+> El diagrama es un `.drawio.svg`: se ve en GitHub y se edita abriéndolo con draw.io
+> (fuente: [`docs/flujo_app.drawio`](docs/flujo_app.drawio)).
 
-### 🏗️ Architecture
--   **Modular Core**: Completely refactored `core` package using the Strategy Pattern for easy extension.
--   **Asynchronous I/O**: Built on `asyncio` and `aiohttp` for high-performance concurrent downloads.
--   **Smart Extraction**: Utilizes **Crawl4AI** for intelligent image extraction and parsing of complex sites.
+1. **Descarga.** `core/handler.py` elige el primer handler cuyo dominio aparece en el *hostname* de la URL
+   (no en cualquier parte de la URL, para evitar SSRF). El handler obtiene el título y la lista de páginas,
+   casi siempre por HTTP puro; Chromium (Playwright) queda para los sitios que lo necesitan o como respaldo.
+   `core/utils.descargar_imagenes()` baja las páginas en paralelo con reintentos y convierte WebP/AVIF a JPEG
+   mientras llegan; luego `img2pdf` arma el PDF.
+2. **Entrega.** Si el PDF pesa ≤ 7,9 MB se adjunta en Discord; si no, se sube a **GoFile** y se apunta en
+   `PDF/.gofile_index.json`. Junto al PDF aparece el botón **🌐 Traducir**.
+3. **Autor y continuaciones.** Tras cada descarga el bot busca el autor y las otras partes de la serie en
+   todos los sitios, y las muestra agrupadas (series › partes › fuentes por idioma) con un menú para
+   descargarlas.
+4. **Traducción.** El bot sube el PDF local a MangaScan por la LAN (sin el límite de Discord), sigue el
+   progreso y devuelve el PDF traducido por Discord o GoFile.
 
-### 🌐 Web Interface
--   **Modern Dashboard**: Built with **Next.js 15**, TailwindCSS and Sileo Notifications.
--   **Real-time Feedback**: WebSocket integration for live logs and progress bars.
--   **Automated Launcher**: Managed by `START_WEB_VERSION.bat` which launches both Backend (FastAPI) and Frontend simultaneously.
+## Bot de Discord
 
-### 🛡️ Open Source Security
--   **SSRF Protection**: Strict hostname verification dynamically applied strictly to incoming scraper requests.
--   **LFI / Path Traversal Prevention**: Absolute path checking guarantees PDFs can only be downloaded from strictly defined folders.
--   **Strict CORS Enforcement**: Mitigates Cross-Origin Resource Sharing vulnerabilities.
+| Comando | Qué hace |
+|---|---|
+| `!descargar <url>` | Descarga a PDF. Acepta una ficha, un lector o una serie (pone sus capítulos en cola). |
+| `!buscar <título>` | Busca en los 11 sitios, suma las obras del artista y agrupa con DeepSeek en series › partes › fuentes (🇪🇸 primero, luego 🇬🇧). Si la IA falla, muestra una lista paginada de tarjetas con portada. Funciona sin número de parte: `!buscar The Wife-Lenders`. |
+| `!traducir <enlace GoFile \| nombre.pdf>` | Traduce con MangaScan un PDF que el bot ya descargó (por su enlace de GoFile o su nombre). También acepta un PDF adjunto al mensaje. |
+| `!help` | Ayuda. |
 
----
+**Botones:** ⏹️ Cancelar (descarga y traducción; no deja PDFs a medias), 🌐 Traducir (en cada PDF entregado),
+menú *Descargar una parte* y 📋 *Ver todos los resultados* en las búsquedas.
 
-## 📚 Supported Sites
+## Sitios compatibles
 
-| Site | Method | Technology | Notes |
-|------|--------|------------|-------|
-| **Z-TMO** | Crawler + Cascade | **Crawl4AI** | Supports full series and single chapters. |
-| **TMO-H** | AI Extraction | **Crawl4AI** | Intelligent image detection. |
-| **M440** | Crawler | **Crawl4AI** | Supports covers and chapters. |
-| **H2R**| JSON Parsing | **AsyncIO** | Fast metadata extraction. |
-| **Hentalk.pw** | SvelteKit JSON | **Playwright** | Bypasses Cloudflare & parses native JSON. |
-| **Hi.la** | Batch JS Injection| **Playwright** | Fast URL extraction + Load Balancing + Retry logic. |
-| **NH.net**| API + Browser | **Playwright** | Bypasses Cloudflare. |
+| Sitio | Descarga | Búsqueda | Cómo |
+|---|:-:|:-:|---|
+| hitomi.la | ✅ | ✅ | HTTP: `galleries.js` + `gg.js`; búsqueda en su índice binario (B-tree + `.nozomi`) |
+| hentainexus.com | ✅ | ✅ | HTTP: descifra la lista de páginas de `initReader` (respaldo con navegador) |
+| nhentai.to · .xxx · .website | ✅ | ✅ | HTTP, handler genérico para los clones de nhentai |
+| 3hentai.net | ✅ | ✅ | HTTP (mismo handler genérico; verifica el nº real de páginas) |
+| tmohentai.app | ✅ | ✅ | HTTP |
+| lectorhentai.com | ✅ | ✅ | HTTP |
+| hentai2read.com | ✅ | ✅ | HTTP: JSON de Inertia |
+| m440.in | ✅ | ✅ | Navegador (crawl4ai / Playwright) |
+| hentalk.pw (y enlaces fakku.cc) | ✅ | ✅ | Navegador |
+| shademanga | ✅ | — | Navegador |
+| nhentai.net · nhentai.top | ⚠️ | — | Protegidos por Cloudflare: el bot avisa y sugiere un espejo. **No se intenta saltar la protección.** |
 
----
+## Configuración
 
-## 📦 Installation
+Variables de entorno (en Docker van en el `.env` del servicio):
 
-1.  **Clone the repository:**
-    ```bash
-    git clone https://github.com/Holkeano526/MangaDownloader.git
-    cd MangaDownloader
-    ```
+| Variable | Por defecto | Uso |
+|---|---|---|
+| `DISCORD_TOKEN` | — | Token del bot (obligatorio). |
+| `DEEPSEEK_API_KEY` | — | Agrupación de series con IA. Sin clave, `!buscar` muestra la lista normal. |
+| `DEEPSEEK_MODEL` | `deepseek-flash` | Modelo de DeepSeek. |
+| `DEEPSEEK_API_URL` | `https://api.deepseek.com/chat/completions` | Endpoint compatible con OpenAI. |
+| `MANGASCAN_URL` | — | URL de MangaScan AI en la LAN (p. ej. `http://192.168.1.x:8001`). |
+| `CONCURRENCIA_IMAGENES` | `3` | Conexiones simultáneas por descarga. |
+| `JPEG_CALIDAD` | `70` | Calidad al convertir WebP/AVIF a JPEG. |
+| `HEADLESS` | `true` | Navegador sin ventana (Docker). |
 
-2.  **Environment Setup:**
-    Create a `.env` file in the root directory:
-    ```ini
-    DISCORD_TOKEN=your_discord_token  # Optional for Discord Bot
-    HEADLESS=true                     # Optional Playwright Visibility (Default: false)
-    ```
+## Instalación
 
-3.  **Install Dependencies:**
-    ```bash
-    pip install -r requirements.txt
-    playwright install chromium
-    ```
+### Docker (NAS)
 
----
+El bot corre como servicio `discord_bot`. La imagen parte de una base congelada
+(`manga-downloader-discord_bot:base-20260816`) porque `requirements.txt` no fija versiones y un build desde
+cero puede romperse; los cambios de código se añaden como una capa fina con `Dockerfile.bot`:
 
-## 💻 Usage
-
-### Option A: Web Version (Recommended)
-Launch the full full-stack application (Backend + Frontend):
-1.  Double-click `START_WEB_VERSION.bat`.
-2.  The browser will open automatically at `http://localhost:3000`.
-3.  Paste a link and watch the magic happen!
-
-### Option B: Desktop App (Legacy GUI)
-Run the standalone Tkinter interface:
 ```bash
-python app.py
+docker build -f Dockerfile.bot -t manga-downloader-discord_bot:latest .
+docker compose up -d --no-build --force-recreate discord_bot
 ```
 
-### Option C: Discord Bot
-Run the Discord bot for remote downloading:
+Antes de reiniciar el bot, comprobar que no haya una descarga ni una traducción en curso.
+
+### Local
+
 ```bash
-python bot.py
-```
-*   **Command:** `!descargar <url>`
-*   Files >8MB are automatically uploaded to **GoFile**.
-
----
-
-## 🧩 Extensibility (Adding New Sites)
-MangaDownloader is designed to be easily extensible using the Strategy Pattern. To add support for a new website:
-1. Create a new handler class inheriting from `BaseSiteHandler` in `core/sites/`.
-2. Implement `get_supported_domains()` and the `process()` logic.
-3. Register the handler in the `HANDLERS` list within `core/handler.py`.
-> For detailed instructions on how an AI or Developer should analyze the DOM and build a new module, refer to the [HOW_TO_ADD_SITES.md](HOW_TO_ADD_SITES.md) guide.
-
----
-
-## 📂 Project Structure
-
-```
-MangaDownloader/
-├── core/                   # Refactored Core Package
-│   ├── sites/              # Site Handlers (Strategy Pattern)
-│   ├── config.py           # Configuration
-│   ├── handler.py          # Routing Logic
-│   └── utils.py            # PDF & Download Utils
-├── web_client_next/        # Next.js Frontend Dashboard
-├── app.py                  # Legacy Tkinter GUI
-├── bot.py                  # Discord Bot
-├── web_server.py           # FastAPI Backend
-└── PDF/                    # Output Directory
+pip install -r requirements.txt
+playwright install chromium
+python bot.py          # bot de Discord (requiere .env con DISCORD_TOKEN)
+python app.py          # escritorio
+START_WEB_VERSION.bat  # web: FastAPI :8000 + Next.js :3000 (Windows)
 ```
 
-## 🐳 Docker (Production Ready)
+## Estructura
 
-Run the entire complete stack instantly using Docker containers:
-```bash
-docker-compose up --build -d
 ```
-*   **Frontend (Next.js):** `http://localhost:3000`
-*   **Backend (FastAPI):** `http://localhost:8000`
+bot.py               Bot de Discord: comandos, vistas (botones/menús), entrega y traducción
+mangascan_client.py  Cliente HTTP de MangaScan AI (subida, progreso, cancelar)
+app.py               App de escritorio (Tkinter)
+web_server.py        API FastAPI + WebSocket para web_client_next/
+core/
+  handler.py         Enrutador URL → handler (el orden importa)
+  utils.py           Motor de descarga, conversión de imágenes y PDF
+  busqueda.py        Búsqueda en todos los sitios, idioma, autor, continuaciones
+  agrupador.py       Agrupación en series/partes con DeepSeek
+  config.py          Constantes (User-Agent, carpetas)
+  sites/             Un handler por sitio (BaseSiteHandler)
+docs/                Diagrama de flujo (draw.io)
+```
+
+## Rendimiento
+
+Medido en el NAS (contenedor limitado a 1–2 CPU):
+
+| Prueba | Resultado |
+|---|---|
+| nhentai.to, 80 páginas | 11,5 s, 0 errores |
+| hentainexus, 41 páginas | 4,8 s |
+
+Claves: lista de páginas por HTTP en vez de navegador, pool paralelo con reintentos ante 429/5xx, conversión de
+imágenes mientras se descarga (hilos = CPU que permite el cgroup, para evitar *throttling*).
+
+## Añadir un sitio
+
+Ver [HOW_TO_ADD_SITES.md](HOW_TO_ADD_SITES.md).
+
+## Límites
+
+- Los sitios con Cloudflare/anti-bot (nhentai.net, nhentai.top) no se descargan: se avisa al usuario.
+- Los sitios cambian su HTML; si un handler HTTP deja de funcionar, los que tienen respaldo pasan al navegador
+  y el resto da un error claro en el log.
+- La agrupación con IA depende de DeepSeek; en horas punta (UTC 01–04 y 06–10, lun–vie) el precio es ×2.
