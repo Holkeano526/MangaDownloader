@@ -15,7 +15,7 @@ Enfoque:
   3. Si DeepSeek falla, no responde o no hay clave, se devuelve None y el bot muestra la lista
      normal.
 
-Configuración: DEEPSEEK_API_KEY (en el .env del bot), DEEPSEEK_MODEL (por defecto deepseek-v4-flash).
+Configuración: DEEPSEEK_API_KEY (en el .env del bot), DEEPSEEK_MODEL (por defecto deepseek-flash).
 """
 from __future__ import annotations
 
@@ -32,7 +32,7 @@ import aiohttp
 from . import busqueda
 
 API_URL = os.getenv("DEEPSEEK_API_URL", "https://api.deepseek.com/chat/completions")
-MODELO = os.getenv("DEEPSEEK_MODEL", "deepseek-v4-flash")
+MODELO = os.getenv("DEEPSEEK_MODEL", "deepseek-flash")  # nombre actual (V4.1-Flash-1017); "deepseek-v4-flash" solo se redirige
 MAX_CANDIDATOS = 70
 
 PROMPT = """Eres un catalogador de doujinshi y manga. Recibes una lista numerada de resultados de búsqueda de
