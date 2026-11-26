@@ -58,7 +58,7 @@ menú *Descargar una parte* y 📋 *Ver todos los resultados* en las búsquedas.
 | sexkomix2.com | ✅ | ✅ | HTTP; busca en español e inglés. Un estudio o una categoría ponen sus cómics en cola |
 | shademanga | ✅ | — | Navegador |
 | nhentai.net · nhentai.top | ⚠️ | — | Protegidos por Cloudflare: el bot avisa y sugiere un espejo. **No se intenta saltar la protección.** |
-| chochox.com · vercomicsporno.com | ⚠️ | — | Desafío de Cloudflare en todas sus páginas (incluso `robots.txt` y `/wp-json`): el bot explica el motivo. |
+| chochox.com · vercomicsporno.com | 🔁 | — | Desafío de Cloudflare en todas sus páginas: no se les pide nada. `!descargar` con un enlace suyo saca el título (y el artista) del propio enlace y ofrece **la misma obra en los sitios compatibles**. |
 
 ## Configuración
 

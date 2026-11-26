@@ -79,10 +79,55 @@ async def process_entry(
     if any(d in hostname for d in BLOQUEADOS_CLOUDFLARE):
         log_callback(f"[ERROR] {hostname} está protegido por Cloudflare (desafío anti-bots en todas sus páginas) "
                      f"y no se puede descargar automáticamente. Busca la obra con !buscar en los sitios compatibles.")
+        # (En Discord, !descargar ya busca la obra por su título antes de llegar aquí.)
         return
     log_callback("[ERROR] Unsupported website.")
 
 
 # Sitios pedidos que responden con el desafío de Cloudflare ("Just a moment", 403) incluso en
-# robots.txt, el feed y /wp-json. No se intenta saltar la protección: solo se explica el motivo.
+# robots.txt, el feed y /wp-json. No se intenta saltar la protección: no se les hace ninguna
+# petición. El bot saca el título del propio enlace y busca la obra en los sitios compatibles.
 BLOQUEADOS_CLOUDFLARE = ("chochox.com", "vercomicsporno.com")
+
+# Dónde pone cada sitio al artista en el slug (visto en sus URLs archivadas):
+#   chochox.com/alicia-goes-wonderland-2-<artista>/     -> al final
+#   vercomicsporno.com/<artista>-sweet-trade-cloud-meadow -> al principio (si no es "traduccion exclusiva")
+_ARTISTA_EN_SLUG = {"chochox.com": -1, "vercomicsporno.com": 0}
+_RUIDO_SLUG = {"comic", "comics", "porno", "porn", "xxx", "hentai", "traduccion", "exclusiva", "espanol",
+               "spanish", "sexo", "historieta", "manga"}
+_NO_SON_OBRAS = {"category", "tag", "artistas", "artista", "author", "page", "comics-porno", "search",
+                 "categoria", "etiqueta"}
+
+
+def obra_desde_enlace(url: str) -> Optional[tuple]:
+    """Para un enlace de un sitio de BLOQUEADOS_CLOUDFLARE: (texto para buscar, artista probable o
+    None, texto completo del slug). None si no es de esos sitios o el enlace no es de una obra
+    (categoría, artista, portada...). Se lee solo la URL: nunca se pide nada a esos sitios."""
+    import re
+    from urllib.parse import unquote
+    try:
+        p = urlparse(url)
+    except ValueError:
+        return None
+    host = p.netloc.lower().split(":")[0]
+    sitio = next((d for d in BLOQUEADOS_CLOUDFLARE if host == d or host.endswith("." + d)), None)
+    if not sitio:
+        return None
+    segmentos = [s for s in unquote(p.path).split("/") if s]
+    if len(segmentos) != 1 or segmentos[0].lower() in _NO_SON_OBRAS:
+        return None
+    palabras = [re.sub(r"[^\w]", "", w) for w in re.split(r"[-_\s]+", segmentos[0])]
+    palabras = [w for w in palabras if w and w.lower() not in _RUIDO_SLUG]
+    if not any(re.search(r"[^\W\d_]", w) for w in palabras):  # "9572-2": solo números
+        return None
+    completo = " ".join(palabras)
+    artista = None
+    tenia_ruido = len(palabras) != len([w for w in re.split(r"[-_\s]+", segmentos[0]) if w])
+    # Artista solo si quedan palabras suficientes para el título; en vercomicsporno los slugs
+    # "...-traduccion-exclusiva" no llevan artista delante.
+    if len(palabras) >= 3 and not (sitio == "vercomicsporno.com" and tenia_ruido):
+        i = _ARTISTA_EN_SLUG[sitio]
+        if not palabras[i].isdigit():  # "alicia-goes-wonderland-2": el 2 es la parte, no el artista
+            artista = palabras[i]
+            palabras = palabras[:-1] if i == -1 else palabras[1:]
+    return " ".join(palabras), artista, completo
