@@ -132,13 +132,14 @@ def _escribir(ruta: str, datos: bytes) -> None:
 async def descargar_imagenes(urls: List[str], folder: str, headers: dict, log_callback: Callable[[str], None],
                              check_cancel: Optional[Callable[[], bool]] = None,
                              progress_callback: Optional[Callable[[int, int], None]] = None,
-                             concurrencia: int = CONCURRENCIA_IMAGENES) -> List[str]:
+                             concurrencia: int = CONCURRENCIA_IMAGENES, convertir: bool = True) -> List[str]:
     """
     Descarga todas las imágenes con un pool de `concurrencia` conexiones: en cuanto
     termina una empieza la siguiente (antes eran tandas de 10 que esperaban a la más lenta).
     Devuelve las rutas en el orden de páginas (las fallidas se omiten).
     """
     sem = asyncio.Semaphore(concurrencia)
+    sem_cpu = asyncio.Semaphore(_cpus_disponibles())
     hechas = 0
     total = len(urls)
     timeout = aiohttp.ClientTimeout(total=120, connect=15, sock_read=60)
@@ -151,6 +152,11 @@ async def descargar_imagenes(urls: List[str], folder: str, headers: dict, log_ca
                 if check_cancel and check_cancel():
                     return None
                 ruta = await download_image(session, url, folder, idx, log_callback)
+            if ruta and convertir:
+                # Convertir para el PDF mientras se descargan las demás (la CPU estaba
+                # parada esperando a la red). Limitado a las CPU reales del contenedor.
+                async with sem_cpu:
+                    ruta = await asyncio.to_thread(preparar_para_pdf, ruta)
             hechas += 1
             if progress_callback:
                 progress_callback(hechas, total)
@@ -173,34 +179,35 @@ def _cpus_disponibles() -> int:
         pass
     return max(1, min(4, os.cpu_count() or 1))
 
+def preparar_para_pdf(path: str) -> str:
+    """JPEG/PNG van tal cual; WebP/AVIF/transparencias se convierten a JPEG (img2pdf no los admite)."""
+    try:
+        with Image.open(path) as img:
+            ext_lower = os.path.splitext(path)[1].lower()
+            needs_conversion = (
+                img.mode in ("RGBA", "LA") or
+                (img.mode == "P" and "transparency" in img.info) or
+                ext_lower not in (".jpg", ".jpeg", ".png")
+            )
+            if needs_conversion:
+                new_path = f"{os.path.splitext(path)[0]}_converted.jpg"
+                img.convert("RGB").save(new_path, "JPEG", quality=JPEG_CALIDAD)
+                return new_path
+    except Exception:
+        pass
+    return path
+
+
 def create_pdf(image_paths: List[str], output_pdf: str, log_callback: Callable[[str], None]) -> bool:
     """Compiles a list of image paths into a single PDF using img2pdf (if available) or Pillow."""
     if not image_paths:
         log_callback("[WARN] No images to compile into PDF.")
         return False
 
-    def _preparar(path: str) -> str:
-        """JPEG/PNG van tal cual; WebP/AVIF/transparencias se convierten a JPEG (img2pdf no los admite)."""
-        try:
-            with Image.open(path) as img:
-                ext_lower = os.path.splitext(path)[1].lower()
-                needs_conversion = (
-                    img.mode in ("RGBA", "LA") or
-                    (img.mode == "P" and "transparency" in img.info) or
-                    ext_lower not in (".jpg", ".jpeg", ".png")
-                )
-                if needs_conversion:
-                    new_path = f"{os.path.splitext(path)[0]}_converted.jpg"
-                    img.convert("RGB").save(new_path, "JPEG", quality=JPEG_CALIDAD)
-                    return new_path
-        except Exception:
-            pass
-        return path
-
     try:
         # Decodificar WebP/AVIF es lo caro: en paralelo (Pillow libera el GIL al decodificar)
         with ThreadPoolExecutor(max_workers=_cpus_disponibles()) as ex:
-            final_paths = list(ex.map(_preparar, image_paths))
+            final_paths = list(ex.map(preparar_para_pdf, image_paths))
         if img2pdf:
             with open(output_pdf, "wb") as f:
                 f.write(img2pdf.convert(final_paths, rotation=img2pdf.Rotation.ifvalid))
