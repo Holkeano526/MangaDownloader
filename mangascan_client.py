@@ -70,7 +70,9 @@ async def traducir_pdf(ruta_pdf: str, carpeta_salida: str, on_estado: Callback) 
     async with aiohttp.ClientSession(timeout=_TIMEOUT_CORTO) as s:
         # 1) Subir (multipart en streaming: no carga el PDF entero en memoria)
         with open(ruta_pdf, "rb") as f:
-            form = aiohttp.FormData()
+            # quote_fields=False: sin esto aiohttp manda el nombre japonés/coreano
+            # codificado como URL (%E4%BF%AE...) y así llegaba a la Biblioteca.
+            form = aiohttp.FormData(quote_fields=False)
             form.add_field("file", f, filename=nombre, content_type="application/pdf")
             form.add_field("fast_mode", "false")
             async with s.post(f"{MANGASCAN_URL}/api/upload", data=form) as r:

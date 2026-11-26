@@ -18,7 +18,8 @@ try:
 except ImportError:
     img2pdf = None
 
-from .config import PDF_FOLDER_NAME, TEMP_FOLDER_NAME, BATCH_SIZE
+from .config import PDF_FOLDER_NAME, TEMP_FOLDER_NAME, CONCURRENCIA_IMAGENES, REINTENTOS_IMAGEN, JPEG_CALIDAD
+from concurrent.futures import ThreadPoolExecutor
 
 # --- Reusable HTTP Session (Keep-Alive, Connection Pooling) ---
 # A dictionary to hold named sessions for different components (web, bot, etc.)
@@ -92,42 +93,110 @@ def clean_filename(text: str) -> str:
 
 async def download_image(session: aiohttp.ClientSession, url: str, folder: str, index: int, log_callback: Callable[[str], None], headers: Optional[dict] = None) -> Optional[str]:
     """
-    Downloads a single image asynchronously and saves it to a persistent local path.
-    
-    Args:
-        session (aiohttp.ClientSession): The active asynchronous HTTP session.
-        url (str): The direct image URL.
-        folder (str): The local directory to save the image (usually a temporary folder).
-        index (int): The page order index, used to ensure correct sorting in the PDF structure.
-        log_callback (Callable): Callback interface to send errors/logs to the frontend.
-        headers (dict): HTTP headers to bypass bot-protections (Cloudflare, User-Agent, etc).
-        
-    Returns:
-        Optional[str]: The absolute path to the downloaded image if successful, else None.
+    Descarga una imagen con reintentos (429/5xx/timeouts, espera creciente).
+    Antes un fallo dejaba la página fuera del PDF sin reintentar.
+    Devuelve la ruta local o None si falla definitivamente.
     """
+    ext = ".jpg"
+    if ".webp" in url: ext = ".webp"
+    elif ".png" in url: ext = ".png"
+    elif ".jpeg" in url: ext = ".jpeg"
+    elif ".avif" in url: ext = ".avif"
+    filepath = os.path.join(folder, f"{index:03d}{ext}")
+
+    for intento in range(1, REINTENTOS_IMAGEN + 1):
+        try:
+            async with session.get(url, headers=headers) as resp:
+                if resp.status == 200:
+                    content = await resp.read()
+                    await asyncio.to_thread(_escribir, filepath, content)
+                    return filepath
+                if resp.status in (403, 404, 410):
+                    log_callback(f"[ERROR] Failed to download image {index}: Status {resp.status}")
+                    return None
+                motivo = f"Status {resp.status}"
+        except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+            motivo = type(e).__name__
+        if intento < REINTENTOS_IMAGEN:
+            log_callback(f"[WARN] Image {index} got {motivo}. Retrying {intento}/{REINTENTOS_IMAGEN - 1}...")
+            await asyncio.sleep(1.5 * intento)
+    log_callback(f"[ERROR] Failed to download image {index} after {REINTENTOS_IMAGEN} attempts ({motivo})")
+    return None
+
+
+def _escribir(ruta: str, datos: bytes) -> None:
+    with open(ruta, "wb") as f:
+        f.write(datos)
+
+
+async def descargar_imagenes(urls: List[str], folder: str, headers: dict, log_callback: Callable[[str], None],
+                             check_cancel: Optional[Callable[[], bool]] = None,
+                             progress_callback: Optional[Callable[[int, int], None]] = None,
+                             concurrencia: int = CONCURRENCIA_IMAGENES, convertir: bool = True) -> List[str]:
+    """
+    Descarga todas las imágenes con un pool de `concurrencia` conexiones: en cuanto
+    termina una empieza la siguiente (antes eran tandas de 10 que esperaban a la más lenta).
+    Devuelve las rutas en el orden de páginas (las fallidas se omiten).
+    """
+    sem = asyncio.Semaphore(concurrencia)
+    sem_cpu = asyncio.Semaphore(_cpus_disponibles())
+    hechas = 0
+    total = len(urls)
+    timeout = aiohttp.ClientTimeout(total=120, connect=15, sock_read=60)
+    connector = aiohttp.TCPConnector(limit=concurrencia * 2, limit_per_host=concurrencia, ttl_dns_cache=300)
+
+    async with aiohttp.ClientSession(headers=headers, timeout=timeout, connector=connector) as session:
+        async def una(idx: int, url: str) -> Optional[str]:
+            nonlocal hechas
+            async with sem:
+                if check_cancel and check_cancel():
+                    return None
+                ruta = await download_image(session, url, folder, idx, log_callback)
+            if ruta and convertir:
+                # Convertir para el PDF mientras se descargan las demás (la CPU estaba
+                # parada esperando a la red). Limitado a las CPU reales del contenedor.
+                async with sem_cpu:
+                    ruta = await asyncio.to_thread(preparar_para_pdf, ruta)
+            hechas += 1
+            if progress_callback:
+                progress_callback(hechas, total)
+            return ruta
+
+        resultados = await asyncio.gather(*(una(i + 1, u) for i, u in enumerate(urls)))
+    return [r for r in resultados if r]
+
+
+def _cpus_disponibles() -> int:
+    """CPU que el contenedor puede usar de verdad (cgroup cpu.max), no las del host.
+    Con --cpus 1 y 4 hilos, el kernel frena el proceso (CFS throttling): medido
+    9,2 s frente a 3,1 s al generar un PDF de 89 páginas."""
     try:
-        # Determine extension
-        ext = ".jpg"
-        if ".webp" in url: ext = ".webp"
-        elif ".png" in url: ext = ".png"
-        elif ".jpeg" in url: ext = ".jpeg"
-        elif ".avif" in url: ext = ".avif"
-        
-        filename = f"{index:03d}{ext}"
-        filepath = os.path.join(folder, filename)
-        
-        async with session.get(url, headers=headers) as resp:
-            if resp.status == 200:
-                content = await resp.read()
-                with open(filepath, 'wb') as f:
-                    f.write(content)
-                return filepath
-            else:
-                log_callback(f"[ERROR] Failed to download image {index}: Status {resp.status}")
-                return None
-    except Exception as e:
-        log_callback(f"[ERROR] Failed to download image {index}: {str(e)}")
-        return None
+        with open("/sys/fs/cgroup/cpu.max") as f:
+            cuota, periodo = f.read().split()
+        if cuota != "max":
+            return max(1, int(int(cuota) / int(periodo)))
+    except (OSError, ValueError):
+        pass
+    return max(1, min(4, os.cpu_count() or 1))
+
+def preparar_para_pdf(path: str) -> str:
+    """JPEG/PNG van tal cual; WebP/AVIF/transparencias se convierten a JPEG (img2pdf no los admite)."""
+    try:
+        with Image.open(path) as img:
+            ext_lower = os.path.splitext(path)[1].lower()
+            needs_conversion = (
+                img.mode in ("RGBA", "LA") or
+                (img.mode == "P" and "transparency" in img.info) or
+                ext_lower not in (".jpg", ".jpeg", ".png")
+            )
+            if needs_conversion:
+                new_path = f"{os.path.splitext(path)[0]}_converted.jpg"
+                img.convert("RGB").save(new_path, "JPEG", quality=JPEG_CALIDAD)
+                return new_path
+    except Exception:
+        pass
+    return path
+
 
 def create_pdf(image_paths: List[str], output_pdf: str, log_callback: Callable[[str], None]) -> bool:
     """Compiles a list of image paths into a single PDF using img2pdf (if available) or Pillow."""
@@ -135,28 +204,10 @@ def create_pdf(image_paths: List[str], output_pdf: str, log_callback: Callable[[
         log_callback("[WARN] No images to compile into PDF.")
         return False
 
-    final_paths = []
-    
     try:
-        for path in image_paths:
-            try:
-                with Image.open(path) as img:
-                    ext_lower = os.path.splitext(path)[1].lower()
-                    needs_conversion = (
-                        img.mode in ("RGBA", "LA") or 
-                        (img.mode == "P" and "transparency" in img.info) or
-                        ext_lower not in (".jpg", ".jpeg", ".png")
-                    )
-                    
-                    if needs_conversion:
-                        new_path = f"{os.path.splitext(path)[0]}_converted.jpg"
-                        img.convert("RGB").save(new_path, "JPEG", quality=70)
-                        final_paths.append(new_path)
-                    else:
-                        final_paths.append(path)
-            except Exception:
-                final_paths.append(path)
-        
+        # Decodificar WebP/AVIF es lo caro: en paralelo (Pillow libera el GIL al decodificar)
+        with ThreadPoolExecutor(max_workers=_cpus_disponibles()) as ex:
+            final_paths = list(ex.map(preparar_para_pdf, image_paths))
         if img2pdf:
             with open(output_pdf, "wb") as f:
                 f.write(img2pdf.convert(final_paths, rotation=img2pdf.Rotation.ifvalid))
@@ -296,23 +347,12 @@ async def download_and_make_pdf(image_urls: List[str], output_name: str, headers
     
     files = []
     
-    async with aiohttp.ClientSession(headers=headers) as session:
-        chunk_size = BATCH_SIZE 
-        results = []
-        for i in range(0, len(image_urls), chunk_size):
-            if check_cancel and check_cancel():
-                log_callback("[INFO] Process cancelled by user.")
-                break
-            chunk = image_urls[i:i+chunk_size]
-            tasks = [download_image(session, u, temp_folder, i + idx + 1, log_callback) for idx, u in enumerate(chunk)]
-            res = await asyncio.gather(*tasks)
-            results.extend(res)
-            
-            if progress_callback:
-                progress_callback(min(i + chunk_size, len(image_urls)), len(image_urls))
-            
-        files = [f for f in results if f]
-    
+    files = await descargar_imagenes(image_urls, temp_folder, headers, log_callback, check_cancel, progress_callback)
+    if check_cancel and check_cancel():
+        log_callback("[INFO] Process cancelled by user.")
+    if len(files) < len(image_urls):
+        log_callback(f"[WARN] {len(image_urls) - len(files)} de {len(image_urls)} páginas no se pudieron descargar.")
+
     files.sort()
     
     if files:
