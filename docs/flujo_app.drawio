@@ -16,7 +16,7 @@
         <mxCell id="carril_in" value="Entradas" style="swimlane;startSize=26;html=1;fillColor=#eef2ff;strokeColor=#6366f1;fontColor=#1e1b4b;fontSize=13;rounded=1;" vertex="1" parent="1">
           <mxGeometry x="40" y="95" width="1220" height="120" as="geometry" />
         </mxCell>
-        <mxCell id="discord" value="&lt;b&gt;Bot de Discord&lt;/b&gt; · bot.py&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;!descargar &amp;lt;url&amp;gt; · !buscar &amp;lt;título&amp;gt; · !traducir&lt;br&gt;botones: Traducir · Cancelar · menús de descarga&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e0e7ff;strokeColor=#4338ca;fontSize=13;" vertex="1" parent="carril_in">
+        <mxCell id="discord" value="&lt;b&gt;Bot de Discord&lt;/b&gt; · bot.py&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;!descargar &amp;lt;url&amp;gt; · !buscar &amp;lt;título | código&amp;gt; · !traducir&lt;br&gt;botones: Traducir · Cancelar · menús de descarga&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e0e7ff;strokeColor=#4338ca;fontSize=13;" vertex="1" parent="carril_in">
           <mxGeometry x="20" y="34" width="420" height="72" as="geometry" />
         </mxCell>
         <mxCell id="web" value="&lt;b&gt;Web&lt;/b&gt; · Next.js :3000 → FastAPI :8000&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;web_client_next/ · web_server.py (WebSocket /ws, /pdfs)&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e0e7ff;strokeColor=#4338ca;fontSize=13;" vertex="1" parent="carril_in">
@@ -92,6 +92,10 @@
         <mxCell id="vistas" value="&lt;b&gt;Series &amp;gt; partes &amp;gt; fuentes&lt;/b&gt; (🇪🇸 primero)&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;o, si falla, lista paginada de 10 tarjetas ordenada por idioma&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e0f2fe;strokeColor=#0284c7;fontSize=12;" vertex="1" parent="carril_bus">
           <mxGeometry x="20" y="222" width="560" height="60" as="geometry" />
         </mxCell>
+        <mxCell id="codigo" value="&lt;b&gt;Código&lt;/b&gt; #177013&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;nhentai (vía nhentai.to) + Hitomi&lt;br&gt;1 tarjeta por sitio: son obras distintas&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fef9c3;strokeColor=#ca8a04;fontSize=11;" vertex="1" parent="carril_bus">
+          <mxGeometry x="482" y="125" width="98" height="76" as="geometry" />
+        </mxCell>
+        <mxCell id="b4" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#ca8a04;endArrow=block;exitX=0.5;exitY=1;entryX=0.95;entryY=0;" edge="1" parent="carril_bus" source="codigo" target="vistas"><mxGeometry relative="1" as="geometry" /></mxCell>
         <mxCell id="b1" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#0284c7;endArrow=block;exitX=0.2;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="carril_bus" source="busq" target="artista"><mxGeometry relative="1" as="geometry" /></mxCell>
         <mxCell id="b2" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#0284c7;endArrow=block;" edge="1" parent="carril_bus" source="artista" target="deepseek"><mxGeometry relative="1" as="geometry" /></mxCell>
         <mxCell id="b3" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#0284c7;endArrow=block;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="carril_bus" source="deepseek" target="vistas"><mxGeometry relative="1" as="geometry" /></mxCell>

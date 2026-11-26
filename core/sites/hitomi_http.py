@@ -199,7 +199,8 @@ async def buscar_ids(texto: str, s: aiohttp.ClientSession) -> List[int]:
 
 
 async def info_galeria(gid: int, s: aiohttp.ClientSession, reglas: Optional["ReglasGG"] = None):
-    """(título, url, portada, artistas, idioma) de una galería de Hitomi."""
+    """(título, url, portada, artistas, idioma, nº de páginas) de una galería de Hitomi.
+    None si la galería no existe (404)."""
     async with s.get(f"{LTN}/galleries/{gid}.js", headers={"Referer": "https://hitomi.la/"}) as r:
         if r.status != 200:
             return None
@@ -215,7 +216,8 @@ async def info_galeria(gid: int, s: aiohttp.ClientSession, reglas: Optional["Reg
         # Miniatura grande: common.js url_from_url_from_hash(id, img, "webpbigtn", "webp", "tn")
         portada = f"https://{chr(97 + reglas.m(g))}tn.{DOMINIO}/webpbigtn/{h[-1]}/{h[-3:-1]}/{h}.webp"
     artistas = [a.get("artist") for a in info.get("artists") or [] if a.get("artist")]
-    return titulo, f"https://hitomi.la/{tipo}/{gid}.html", portada, artistas, (info.get("language") or "").lower()
+    return (titulo, f"https://hitomi.la/{tipo}/{gid}.html", portada, artistas, (info.get("language") or "").lower(),
+            len(archivos))
 
 
 async def reglas_gg(s: aiohttp.ClientSession) -> Optional["ReglasGG"]:
