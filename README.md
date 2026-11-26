@@ -1,6 +1,6 @@
 # MangaDownloader
 
-Descarga mangas y doujinshi de **11 sitios** a PDF, **busca en todos a la vez**, agrupa las partes de una
+Descarga mangas, doujinshi y cómics de **14 sitios** a PDF, **busca en todos a la vez**, agrupa las partes de una
 serie con IA (DeepSeek) y, con un botón, **los traduce** con [MangaScan AI](https://github.com/Holkeano526/mangascan).
 
 Se usa sobre todo como **bot de Discord** (corre en un NAS con Docker), pero el mismo núcleo (`core/`) sirve
@@ -33,7 +33,7 @@ también a una interfaz web (Next.js + FastAPI) y a una app de escritorio (Tkint
 | Comando | Qué hace |
 |---|---|
 | `!descargar <url>` | Descarga a PDF. Acepta una ficha, un lector o una serie (pone sus capítulos en cola). |
-| `!buscar <título>` | Busca en los 11 sitios, suma las obras del artista y agrupa con DeepSeek en series › partes › fuentes (🇪🇸 primero, luego 🇬🇧). Si la IA falla, muestra una lista paginada de tarjetas con portada. Funciona sin número de parte: `!buscar The Wife-Lenders`. |
+| `!buscar <título>` | Busca en los 14 sitios, suma las obras del artista y agrupa con DeepSeek en series › partes › fuentes (🇪🇸 primero, luego 🇬🇧). Si la IA falla, muestra una lista paginada de tarjetas con portada. Funciona sin número de parte: `!buscar The Wife-Lenders`. |
 | `!traducir <enlace GoFile \| nombre.pdf>` | Traduce con MangaScan un PDF que el bot ya descargó (por su enlace de GoFile o su nombre). También acepta un PDF adjunto al mensaje. |
 | `!help` | Ayuda. |
 
@@ -53,6 +53,9 @@ menú *Descargar una parte* y 📋 *Ver todos los resultados* en las búsquedas.
 | hentai2read.com | ✅ | ✅ | HTTP: JSON de Inertia |
 | m440.in | ✅ | ✅ | Navegador (crawl4ai / Playwright) |
 | hentalk.pw (y enlaces fakku.cc) | ✅ | ✅ | Navegador |
+| imhentai.xxx | ✅ | ✅ | HTTP: servidor, carpeta y extensión de cada página en la ficha (`load_*`, `g_th`) |
+| allporncomic.com | ✅ | ✅ | HTTP (WordPress Madara). Un cómic o un artista ponen sus capítulos en cola |
+| sexkomix2.com | ✅ | ✅ | HTTP; busca en español e inglés. Un estudio o una categoría ponen sus cómics en cola |
 | shademanga | ✅ | — | Navegador |
 | nhentai.net · nhentai.top | ⚠️ | — | Protegidos por Cloudflare: el bot avisa y sugiere un espejo. **No se intenta saltar la protección.** |
 | chochox.com · vercomicsporno.com | ⚠️ | — | Desafío de Cloudflare en todas sus páginas (incluso `robots.txt` y `/wp-json`): el bot explica el motivo. |

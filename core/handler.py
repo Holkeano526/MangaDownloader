@@ -16,6 +16,9 @@ from .sites import (
     M440Handler,
     HentalkHandler,
     ShadeMangaHandler,
+    SexKomix2Handler,
+    AllPornComicHandler,
+    IMHentaiHandler,
 )
 
 # Instantiate handlers (stateless). Gana el primero cuyo dominio aparezca en la URL.
@@ -24,11 +27,14 @@ HANDLERS = [
     LectorHentaiHandler(),
     HentaiNexusHandler(),
     HitomiHandler(),
+    IMHentaiHandler(),       # antes que los mirrors de nhentai por si algún dominio se parece
     NHentaiMirrorHandler(),  # nhentai.* (to, xxx, website, net, top...) y 3hentai.net
     H2RHandler(),
     M440Handler(),
     HentalkHandler(),        # hentalk.pw y los enlaces viejos de fakku.cc (mismo servidor)
     ShadeMangaHandler(),
+    SexKomix2Handler(),
+    AllPornComicHandler(),
 ]
 
 from urllib.parse import urlparse

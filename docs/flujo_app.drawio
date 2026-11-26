@@ -8,7 +8,7 @@
         <mxCell id="titulo" value="&lt;b&gt;MangaDownloader&lt;/b&gt; — cómo funciona" style="text;html=1;fontSize=22;fontColor=#1e1b4b;align=left;verticalAlign=middle;" vertex="1" parent="1">
           <mxGeometry x="40" y="20" width="700" height="40" as="geometry" />
         </mxCell>
-        <mxCell id="sub" value="Descarga mangas de 11 sitios a PDF, busca en todos a la vez, agrupa series con IA y los traduce con MangaScan AI." style="text;html=1;fontSize=13;fontColor=#475569;align=left;" vertex="1" parent="1">
+        <mxCell id="sub" value="Descarga mangas y cómics de 14 sitios a PDF, busca en todos a la vez, agrupa series con IA y los traduce con MangaScan AI." style="text;html=1;fontSize=13;fontColor=#475569;align=left;" vertex="1" parent="1">
           <mxGeometry x="40" y="56" width="1000" height="24" as="geometry" />
         </mxCell>
 
@@ -33,7 +33,7 @@
         <mxCell id="router" value="&lt;b&gt;Enrutador&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;core/handler.py&lt;br&gt;process_entry()&lt;br&gt;(dominio de la URL)&lt;/font&gt;" style="rhombus;whiteSpace=wrap;html=1;fillColor=#dcfce7;strokeColor=#15803d;fontSize=12;" vertex="1" parent="carril_des">
           <mxGeometry x="20" y="40" width="230" height="120" as="geometry" />
         </mxCell>
-        <mxCell id="sitios" value="&lt;b&gt;Handlers de sitio&lt;/b&gt; · core/sites/&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;&lt;b&gt;Por HTTP:&lt;/b&gt; Hitomi (galleries.js + gg.js) · hentainexus (descifra initReader) · nhentai.* y 3hentai (genérico) · tmohentai.app · lectorhentai · hentai2read (Inertia JSON)&lt;br&gt;&lt;b&gt;Con navegador:&lt;/b&gt; hentalk.pw / fakku.cc · m440 · shademanga&lt;br&gt;Respaldo con Chromium si cambia el formato · Cloudflare: aviso, no se salta&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#15803d;fontSize=13;align=left;spacingLeft=8;" vertex="1" parent="carril_des">
+        <mxCell id="sitios" value="&lt;b&gt;Handlers de sitio&lt;/b&gt; · core/sites/&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;&lt;b&gt;Por HTTP:&lt;/b&gt; Hitomi (galleries.js + gg.js) · hentainexus (descifra initReader) · nhentai.* y 3hentai (genérico) · tmohentai.app · lectorhentai · hentai2read (Inertia JSON) · imhentai · allporncomic · sexkomix2&lt;br&gt;&lt;b&gt;Con navegador:&lt;/b&gt; hentalk.pw / fakku.cc · m440 · shademanga&lt;br&gt;Respaldo con Chromium si cambia el formato · Cloudflare: aviso, no se salta&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#15803d;fontSize=13;align=left;spacingLeft=8;" vertex="1" parent="carril_des">
           <mxGeometry x="290" y="40" width="560" height="120" as="geometry" />
         </mxCell>
         <mxCell id="lista_urls" value="título +&lt;br&gt;URLs de páginas" style="shape=parallelogram;perimeter=parallelogramPerimeter;whiteSpace=wrap;html=1;fixedSize=1;fillColor=#fef9c3;strokeColor=#a16207;fontSize=12;" vertex="1" parent="carril_des">
@@ -80,7 +80,7 @@
         <mxCell id="carril_bus" value="3 · !buscar y continuaciones" style="swimlane;startSize=26;html=1;fillColor=#f0f9ff;strokeColor=#0284c7;fontColor=#0c4a6e;fontSize=13;rounded=1;" vertex="1" parent="1">
           <mxGeometry x="660" y="595" width="600" height="300" as="geometry" />
         </mxCell>
-        <mxCell id="busq" value="&lt;b&gt;Búsqueda en 11 sitios a la vez&lt;/b&gt; · core/busqueda.py&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;Hitomi (índice binario) · hentainexus · nhentai ×3 · 3hentai · hentai2read · m440 · hentalk · tmohentai · lectorhentai&lt;br&gt;idioma de cada resultado · portadas&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e0f2fe;strokeColor=#0284c7;fontSize=12;" vertex="1" parent="carril_bus">
+        <mxCell id="busq" value="&lt;b&gt;Búsqueda en 14 sitios a la vez&lt;/b&gt; · core/busqueda.py&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;Hitomi (índice binario) · hentainexus · nhentai ×3 · 3hentai · hentai2read · m440 · hentalk · tmohentai · lectorhentai · imhentai · allporncomic · sexkomix2&lt;br&gt;idioma de cada resultado · portadas&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e0f2fe;strokeColor=#0284c7;fontSize=12;" vertex="1" parent="carril_bus">
           <mxGeometry x="20" y="36" width="560" height="74" as="geometry" />
         </mxCell>
         <mxCell id="artista" value="+ obras del &lt;b&gt;artista&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:10px&quot;&gt;une partes con títulos distintos&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#0284c7;fontSize=12;" vertex="1" parent="carril_bus">
