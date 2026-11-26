@@ -779,6 +779,10 @@ class SeriesView(discord.ui.View):
             menu = discord.ui.Select(placeholder="Descargar una parte", options=opciones, row=0)
             menu.callback = self._elegido
             self.add_item(menu)
+        # «Versión sin censura» nada más listar (no hace falta descargar antes)
+        boton = discord.ui.Button(label="🔓 Versión sin censura", style=discord.ButtonStyle.primary, row=1)
+        boton.callback = self._sin_censura
+        self.add_item(boton)
         if todos:
             boton = discord.ui.Button(label=f"📋 Ver todos los resultados ({len(todos)})",
                                       style=discord.ButtonStyle.secondary, row=1)
@@ -794,9 +798,6 @@ class SeriesView(discord.ui.View):
             boton = discord.ui.Button(label=f"✍️ Más obras de {a}"[:80], style=discord.ButtonStyle.secondary, row=1)
             boton.callback = lambda i, a=a: self._autor(i, a)
             self.add_item(boton)
-        boton = discord.ui.Button(label="🔓 Versión sin censura", style=discord.ButtonStyle.secondary, row=1)
-        boton.callback = self._sin_censura
-        self.add_item(boton)
 
     async def _sin_censura(self, interaction: discord.Interaction):
         if not self._permitido(interaction):
@@ -950,9 +951,6 @@ class AccionesObraView(discord.ui.View):
         b = discord.ui.Button(label="🔎 Buscar continuación", style=discord.ButtonStyle.primary)
         b.callback = self._continuacion
         self.add_item(b)
-        b = discord.ui.Button(label="🔓 Versión sin censura", style=discord.ButtonStyle.secondary)
-        b.callback = self._sin_censura
-        self.add_item(b)
         if autor:
             b = discord.ui.Button(label=f"✍️ Más obras de {autor}"[:80], style=discord.ButtonStyle.secondary)
             b.callback = self._autor
@@ -971,14 +969,6 @@ class AccionesObraView(discord.ui.View):
             return
         await interaction.response.send_message(f"✍️ Buscando obras de **{self.autor[:100]}**...")
         bot.loop.create_task(buscar_obras_autor(self.ctx, self.autor, self.url))
-
-    async def _sin_censura(self, interaction: discord.Interaction):
-        if not _permitido(self.ctx, interaction):
-            await interaction.response.send_message("Usa tu propio !buscar.", ephemeral=True)
-            return
-        await interaction.response.send_message(
-            f"🔓 Buscando la versión sin censura de **{busqueda.consulta_de_titulo(self.titulo)[:150]}**...")
-        bot.loop.create_task(buscar_sin_censura(self.ctx, self.titulo, self.url))
 
 
 async def ofrecer_continuacion(ctx, titulo: str, url: str):
