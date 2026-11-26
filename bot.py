@@ -19,6 +19,7 @@ import os
 import asyncio
 import re
 import aiohttp
+import io
 import json
 import tempfile
 import time
@@ -613,6 +614,59 @@ def _linea_resultado(i: int, r: "busqueda.Resultado") -> str:
     return f"**{i}.** [{r.titulo[:90]}]({r.url}) {ICONO_SITIO.get(r.sitio, '⚪')} `{r.sitio}`"
 
 
+COLOR_SITIO = {"hentainexus": 0x9b59b6, "nhentai.to": 0xe74c3c, "nhentai.xxx": 0xe74c3c, "nhentai.website": 0xe74c3c,
+               "tmohentai.app": 0xe67e22, "lectorhentai": 0x2ecc71, "hitomi": 0x3498db}
+
+
+async def _bajar_portada(session: aiohttp.ClientSession, r) -> Optional[tuple]:
+    """Descarga la portada de un resultado con el Referer de su sitio (varios servidores de
+    imágenes rechazan otro origen, así que Discord no podría cargarlas desde el enlace)."""
+    if not r.portada:
+        return None
+    from urllib.parse import urlparse
+    origen = "{0.scheme}://{0.netloc}/".format(urlparse(r.url))
+    try:
+        async with session.get(r.portada, headers={"Referer": origen}) as resp:
+            if resp.status != 200:
+                return None
+            datos = await resp.read()
+        if not datos or len(datos) > 4 * 1024 * 1024:
+            return None
+        # Formato por la firma del fichero: algunos servidores (lectorhentai) envían las WebP
+        # como application/octet-stream
+        if datos[:3] == b"\xff\xd8\xff":
+            ext = "jpg"
+        elif datos[:8] == b"\x89PNG\r\n\x1a\n":
+            ext = "png"
+        elif datos[:4] == b"RIFF" and datos[8:12] == b"WEBP":
+            ext = "webp"
+        elif datos[:4] == b"GIF8":
+            ext = "gif"
+        else:
+            return None  # no es una imagen (p. ej. una página de error)
+        return datos, ext
+    except Exception:
+        return None
+
+
+async def tarjetas_resultados(resultados, desde: int = 1):
+    """Una tarjeta (embed) por resultado con su portada como miniatura adjunta. Máx. 10 por mensaje."""
+    resultados = resultados[:10]
+    async with aiohttp.ClientSession(headers={"User-Agent": core.config.USER_AGENT},
+                                     timeout=aiohttp.ClientTimeout(total=15)) as s:
+        portadas = await asyncio.gather(*(_bajar_portada(s, r) for r in resultados))
+    embeds, archivos = [], []
+    for i, (r, portada) in enumerate(zip(resultados, portadas), start=desde):
+        e = discord.Embed(title=f"{i}. {r.titulo}"[:256], url=r.url, color=COLOR_SITIO.get(r.sitio, 0x95a5a6),
+                          description=f"{ICONO_SITIO.get(r.sitio, '⚪')} `{r.sitio}`")
+        if portada:
+            nombre = f"portada_{i}.{portada[1]}"
+            archivos.append(discord.File(io.BytesIO(portada[0]), filename=nombre))
+            e.set_thumbnail(url=f"attachment://{nombre}")
+        embeds.append(e)
+    return embeds, archivos
+
+
 class ElegirDescargaView(discord.ui.View):
     """Menú desplegable para descargar uno de los resultados (búsqueda o continuaciones)."""
 
@@ -670,8 +724,12 @@ async def informar_autor_y_continuaciones(ctx, titulo: str, url: str):
                         inline=False)
     if not lista:
         embed.description = "No encontré continuaciones en los sitios compatibles."
-    vista = ElegirDescargaView(ctx, lista, "Descargar una continuación") if lista else None
-    await (ctx.send(embed=embed, view=vista) if vista else ctx.send(embed=embed))
+        await ctx.send(embed=embed)
+        return
+    # Cabecera (autor + listas) y una tarjeta con portada por cada parte encontrada (máx. 9 + cabecera)
+    tarjetas, archivos = await tarjetas_resultados(lista[:9])
+    await ctx.send(embeds=[embed] + tarjetas, files=archivos,
+                   view=ElegirDescargaView(ctx, lista, "Descargar una continuación"))
 
 
 @bot.command(name='buscar')
@@ -697,11 +755,17 @@ async def buscar_cmd(ctx, *, texto: Optional[str] = None):
         await espera.edit(embed=embed)
         return
     mostrados = resultados[:15]
-    embed.description = "\n".join(_linea_resultado(i, r) for i, r in enumerate(mostrados, 1))[:4000]
     sitios = sorted({r.sitio for r in resultados})
-    embed.set_footer(text=f"{len(resultados)} resultado(s) en {len(sitios)} sitio(s) · {time.time() - t0:.1f}s · "
-                          f"Hitomi no tiene buscador compatible")
-    await espera.edit(embed=embed, view=ElegirDescargaView(ctx, mostrados))
+    tarjetas, archivos = await tarjetas_resultados(mostrados[:10])
+    cabecera = (f"🔎 **«{texto[:200]}»** · {len(resultados)} resultado(s) en {len(sitios)} sitio(s) · "
+                f"{time.time() - t0:.1f}s · Hitomi no tiene buscador compatible")
+    if len(mostrados) > 10:  # Discord admite 10 tarjetas por mensaje: el resto, como líneas
+        cabecera += "\n" + "\n".join(_linea_resultado(i, r) for i, r in enumerate(mostrados[10:], 11))
+    try:
+        await espera.delete()
+    except discord.errors.HTTPException:
+        pass
+    await ctx.send(content=cabecera[:2000], embeds=tarjetas, files=archivos, view=ElegirDescargaView(ctx, mostrados))
 
 
 @bot.command(name='traducir')

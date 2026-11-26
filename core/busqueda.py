@@ -38,6 +38,7 @@ class Resultado:
     url: str
     puntuacion: float = 0.0
     numero: Optional[float] = None
+    portada: str = ""  # URL de la miniatura/portada (la tarjeta del resultado la trae)
     extra: dict = field(default_factory=dict)
 
 
@@ -89,9 +90,10 @@ def _limpio(t: str) -> str:
     return re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", " ", t))).strip()
 
 
-def _enlaces(pagina: str, base: str, patron: str) -> List[Tuple[str, str]]:
-    """[(url absoluta, título)] de los <a> cuyo href casa con patron. Título: atributo title,
-    alt de la imagen, o el texto del enlace (el más largo si un mismo enlace aparece varias veces)."""
+def _enlaces(pagina: str, base: str, patron: str) -> List[Tuple[str, str, str]]:
+    """[(url absoluta, título, portada)] de los <a> cuyo href casa con patron. Título: atributo
+    title, alt de la imagen, o el texto del enlace (el más largo si un mismo enlace aparece varias
+    veces). Portada: la primera imagen dentro del enlace (data-src antes que src; sin data:)."""
     vistos: dict = {}
     for m in re.finditer(rf'<a\b([^>]*href="([^"]*{patron}[^"]*)"[^>]*)>(.*?)</a>', pagina, re.S | re.I):
         attrs, href, dentro = m.group(1), m.group(2), m.group(3)
@@ -105,8 +107,16 @@ def _enlaces(pagina: str, base: str, patron: str) -> List[Tuple[str, str]]:
             a = re.search(r'\balt="([^"]+)"', dentro)
             t = html.unescape(a.group(1)) if a else ""
         clave = re.search(patron, href).group(0)
-        if t and (clave not in vistos or len(t) > len(vistos[clave][1])):
-            vistos[clave] = (urljoin(base, href), t.strip())
+        portada = ""
+        for img in re.findall(r'(?:data-src|data-lazy-src|src)="([^"]+)"', dentro):
+            if not img.startswith("data:"):
+                portada = urljoin(base, img)
+                break
+        previo = vistos.get(clave)
+        if t and (previo is None or len(t) > len(previo[1])):
+            vistos[clave] = (urljoin(base, href), t.strip(), portada or (previo[2] if previo else ""))
+        elif previo and not previo[2] and portada:
+            vistos[clave] = (previo[0], previo[1], portada)
     return list(vistos.values())
 
 
@@ -120,22 +130,22 @@ async def _get(s: aiohttp.ClientSession, url: str, **kw) -> str:
 
 async def _hentainexus(s, q):
     p = await _get(s, f"https://hentainexus.com/?q={quote_plus(q)}")
-    return [("hentainexus", t, u) for u, t in _enlaces(p, "https://hentainexus.com/", r"/view/\d+")]
+    return [("hentainexus", t, u, img) for u, t, img in _enlaces(p, "https://hentainexus.com/", r"/view/\d+")]
 
 
 async def _nhentai_to(s, q):
     p = await _get(s, f"https://nhentai.to/search/?q={quote_plus(q)}")
-    return [("nhentai.to", t, u) for u, t in _enlaces(p, "https://nhentai.to/", r"/g/\d+")]
+    return [("nhentai.to", t, u, img) for u, t, img in _enlaces(p, "https://nhentai.to/", r"/g/\d+")]
 
 
 async def _nhentai_xxx(s, q):
     p = await _get(s, f"https://nhentai.xxx/search/?key={quote_plus(q)}")
-    return [("nhentai.xxx", t, u) for u, t in _enlaces(p, "https://nhentai.xxx/", r"/g/\d+")]
+    return [("nhentai.xxx", t, u, img) for u, t, img in _enlaces(p, "https://nhentai.xxx/", r"/g/\d+")]
 
 
 async def _nhentai_website(s, q):
     p = await _get(s, f"https://nhentai.website/search?q={quote_plus(q)}")
-    return [("nhentai.website", t, u) for u, t in _enlaces(p, "https://nhentai.website/", r"/read/\d+")]
+    return [("nhentai.website", t, u, img) for u, t, img in _enlaces(p, "https://nhentai.website/", r"/read/\d+")]
 
 
 async def _tmohentai(s, q):
@@ -146,17 +156,17 @@ async def _tmohentai(s, q):
         p = json.loads(texto).get("html", "") if texto else ""
     except ValueError:
         p = ""
-    return [("tmohentai.app", t, u) for u, t in _enlaces(p, "https://tmohentai.app/", r"/library/[a-z]+/\d+")]
+    return [("tmohentai.app", t, u, img) for u, t, img in _enlaces(p, "https://tmohentai.app/", r"/library/[a-z]+/\d+")]
 
 
 async def _lectorhentai(s, q):
     p = await _get(s, f"https://lectorhentai.com/tipo/all?s={quote_plus(q)}")
     res = []
-    for u, t in _enlaces(p, "https://lectorhentai.com/", r"/manga/\d+"):
+    for u, t, img in _enlaces(p, "https://lectorhentai.com/", r"/manga/\d+"):
         # El texto de la tarjeta lleva tipo delante y fecha detrás: "Hentai Sin Censura <título> hace 3 días"
         t = re.sub(r"^(?:Hentai|Manga|Doujinshi)(?:\s+Sin Censura)?\s+", "", t, flags=re.I)
         t = re.sub(r"\s+(?:hace\s+\d+\s+\w+|\d{1,2}\s+\w{3}\s+\d{4})\s*$", "", t, flags=re.I)
-        res.append(("lectorhentai", t, u))
+        res.append(("lectorhentai", t, u, img))
     return res
 
 
@@ -183,13 +193,13 @@ async def buscar(texto: str, minimo: float = 0.6, limite: int = 25) -> List[Resu
         listas = await asyncio.gather(*(seguro(f, q) for f in BUSCADORES for q in variantes))
     resultados, urls = [], set()
     for lista in listas:
-        for sitio, titulo, url in lista:
+        for sitio, titulo, url, portada in lista:
             if url in urls:
                 continue
             p = parecido(texto, titulo)
             if p >= minimo:
                 urls.add(url)
-                resultados.append(Resultado(sitio, titulo, url, p, titulo_base(titulo)[1]))
+                resultados.append(Resultado(sitio, titulo, url, p, titulo_base(titulo)[1], portada))
     resultados.sort(key=lambda r: (-r.puntuacion, r.numero if r.numero is not None else 1e9, r.sitio))
     return resultados[:limite]
 
