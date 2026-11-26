@@ -10,6 +10,7 @@ from playwright.async_api import async_playwright
 
 from .base import BaseSiteHandler
 from .. import config
+from ..http import crear_sesion
 from ..utils import finalize_pdf_flow, clean_filename
 
 
@@ -31,15 +32,13 @@ class ShadeMangaHandler(BaseSiteHandler):
         Download images from Shademanga.com using Playwright to extract DOM
         image URLs, then downloading them directly.
         """
-        import aiohttp
-        
         if "/serie/local/" in url:
             log_callback(f"[INIT] URL de serie detectada. Extrayendo capítulos de: {url}")
             try:
                 serie_id = url.rstrip('/').split('/')[-1]
                 api_url = f"https://shademanga.com/api/series-locales/{serie_id}"
                 
-                async with aiohttp.ClientSession() as session:
+                async with crear_sesion() as session:
                     async with session.get(api_url) as resp:
                         if resp.status == 200:
                             data = await resp.json()

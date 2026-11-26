@@ -31,6 +31,7 @@ import core.config
 import mangascan_client
 from core import busqueda
 from core import agrupador
+from core.http import SesionHTTP, crear_sesion
 
 load_dotenv()
 TOKEN = os.getenv('DISCORD_TOKEN')
@@ -623,7 +624,7 @@ COLOR_SITIO = {"hentainexus": 0x9b59b6, "nhentai.to": 0xe74c3c, "nhentai.xxx": 0
                "3hentai": 0xf1c40f, "hentai2read": 0x8e5a3c, "m440": 0x34495e, "hentalk": 0x1abc9c}
 
 
-async def _bajar_portada(session: aiohttp.ClientSession, r) -> Optional[tuple]:
+async def _bajar_portada(session: SesionHTTP, r) -> Optional[tuple]:
     """Descarga la portada de un resultado con el Referer de su sitio (varios servidores de
     imágenes rechazan otro origen, así que Discord no podría cargarlas desde el enlace)."""
     if not r.portada:
@@ -657,8 +658,8 @@ async def _bajar_portada(session: aiohttp.ClientSession, r) -> Optional[tuple]:
 async def tarjetas_resultados(resultados, desde: int = 1):
     """Una tarjeta (embed) por resultado con su portada como miniatura adjunta. Máx. 10 por mensaje."""
     resultados = resultados[:10]
-    async with aiohttp.ClientSession(headers={"User-Agent": core.config.USER_AGENT},
-                                     timeout=aiohttp.ClientTimeout(total=15)) as s:
+    async with crear_sesion(headers={"User-Agent": core.config.USER_AGENT},
+                            timeout=aiohttp.ClientTimeout(total=15)) as s:
         portadas = await asyncio.gather(*(_bajar_portada(s, r) for r in resultados))
     embeds, archivos = [], []
     for i, (r, portada) in enumerate(zip(resultados, portadas), start=desde):
@@ -787,8 +788,8 @@ async def enviar_series(destino, ctx, texto: str, series, todos, segundos: float
                         hasta=None):
     """Un embed por serie (máx. 3) con su portada; menú para descargar y botón de lista completa."""
     embeds, archivos = [], []
-    async with aiohttp.ClientSession(headers={"User-Agent": core.config.USER_AGENT},
-                                     timeout=aiohttp.ClientTimeout(total=15)) as s:
+    async with crear_sesion(headers={"User-Agent": core.config.USER_AGENT},
+                            timeout=aiohttp.ClientTimeout(total=15)) as s:
         portadas = await asyncio.gather(*(_bajar_portada(s, serie.partes[0].resultados[0]) for serie in series[:3]))
     for i, (serie, portada) in enumerate(zip(series[:3], portadas)):
         e = _embed_serie(serie, i, actual_url, hasta)

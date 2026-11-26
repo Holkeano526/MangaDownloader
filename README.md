@@ -57,8 +57,8 @@ menú *Descargar una parte* y 📋 *Ver todos los resultados* en las búsquedas.
 | allporncomic.com | ✅ | ✅ | HTTP (WordPress Madara). Un cómic o un artista ponen sus capítulos en cola |
 | sexkomix2.com | ✅ | ✅ | HTTP; busca en español e inglés. Un estudio o una categoría ponen sus cómics en cola |
 | shademanga | ✅ | — | Navegador |
-| nhentai.net · nhentai.top | ⚠️ | — | Protegidos por Cloudflare: el bot avisa y sugiere un espejo. **No se intenta saltar la protección.** |
-| chochox.com · vercomicsporno.com | ⚠️ | — | Desafío de Cloudflare en todas sus páginas (incluso `robots.txt` y `/wp-json`): el bot explica el motivo. |
+| nhentai.net · nhentai.top | ⚠️ | — | Cloudflare: reintento con cloudscraper. nhentai.net sirve ya una app JS/API (el handler HTML puede no verla); nhentai.top puede seguir dando el desafío. |
+| chochox.com · vercomicsporno.com | ⚠️ | — | Cloudflare en todas sus páginas: se intenta con cloudscraper, pero aún no tienen handler propio. |
 
 ## Configuración
 
@@ -109,6 +109,7 @@ app.py               App de escritorio (Tkinter)
 web_server.py        API FastAPI + WebSocket para web_client_next/
 core/
   handler.py         Enrutador URL → handler (el orden importa)
+  http.py            Capa HTTP: aiohttp normal + reintento con cloudscraper ante Cloudflare
   utils.py           Motor de descarga, conversión de imágenes y PDF
   busqueda.py        Búsqueda en todos los sitios, idioma, autor, continuaciones
   agrupador.py       Agrupación en series/partes con DeepSeek
@@ -135,8 +136,9 @@ Ver [HOW_TO_ADD_SITES.md](HOW_TO_ADD_SITES.md).
 
 ## Límites
 
-- Los sitios con Cloudflare/anti-bot (nhentai.net, nhentai.top, chochox.com, vercomicsporno.com) no se
-  descargan: se avisa al usuario.
+- Los sitios con Cloudflare pasan por `core/http.py`: se pide con aiohttp y, si responden con un desafío,
+  la misma petición se repite con cloudscraper en un hilo aparte. No resuelve captchas interactivas ni
+  Turnstile: en ese caso se avisa al usuario.
 - Tras una descarga solo se ofrecen las partes posteriores: si bajaste el recopilatorio "1-3", el menú
   empieza en la 4.
 - Los sitios cambian su HTML; si un handler HTTP deja de funcionar, los que tienen respaldo pasan al navegador

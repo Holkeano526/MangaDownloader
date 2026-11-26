@@ -15,10 +15,9 @@ Plantilla (HTTP puro, la opción preferida):
 import re
 from typing import Callable, Optional
 
-import aiohttp
-
 from .base import BaseSiteHandler
 from .. import config
+from ..http import crear_sesion
 from ..utils import clean_filename, download_and_make_pdf
 
 
@@ -33,9 +32,9 @@ class NuevoSitioHandler(BaseSiteHandler):
                       check_cancel: Callable[[], bool],
                       progress_callback: Optional[Callable[[int, int], None]] = None):
         cab = {"User-Agent": config.USER_AGENT, "Referer": "https://nuevositio.com/"}
-        async with aiohttp.ClientSession(headers=cab) as s:
+        async with crear_sesion(headers=cab) as s:
             async with s.get(url) as r:
-                html = await r.text()
+                html = await r.text(errors="replace")
 
         titulo = re.search(r"<h1[^>]*>(.*?)</h1>", html, re.S).group(1).strip()
         paginas = re.findall(r'data-src="(https://[^"]+\.(?:jpg|png|webp))"', html)
@@ -53,8 +52,9 @@ Reglas:
 
 - **Primero HTTP.** Busca la lista de páginas en el HTML, en un JSON incrustado o en la API que usa el lector.
   Usa Playwright solo si no hay otra forma, o como respaldo cuando el formato cambie.
-- **No esquives protecciones** (Cloudflare, captchas, anti-bot). Si el sitio las tiene, registra un aviso
-  claro y devuelve `None`.
+- **Cloudflare:** usa `crear_sesion` de `core/http.py` en vez de `aiohttp.ClientSession`. Si el sitio
+  responde con un desafío, la capa repite la petición con cloudscraper en un hilo aparte. Si aun así no se
+  resuelve (captcha interactiva, Turnstile), muestra un aviso claro y devuelve `None`.
 - **No descargues tú las imágenes:** `download_and_make_pdf` ya hace el pool paralelo, los reintentos ante
   429/5xx, la conversión WebP/AVIF → JPEG y la cancelación sin dejar PDFs a medias.
 - **Series:** si la URL es la página de una serie, devuelve `list[str]` con las URLs de los capítulos; las

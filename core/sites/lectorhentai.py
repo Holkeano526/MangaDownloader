@@ -23,6 +23,7 @@ import aiohttp
 
 from .base import BaseSiteHandler
 from .. import config
+from ..http import crear_sesion
 from ..utils import clean_filename, download_and_make_pdf
 
 WEB = "https://lectorhentai.com"
@@ -55,7 +56,7 @@ class LectorHentaiHandler(BaseSiteHandler):
 
         headers = {"User-Agent": config.USER_AGENT, "Referer": f"{WEB}/"}
         timeout = aiohttp.ClientTimeout(total=30, connect=10)
-        async with aiohttp.ClientSession(headers=headers, timeout=timeout) as s:
+        async with crear_sesion(headers=headers, timeout=timeout) as s:
             # Título y páginas a la vez (son peticiones independientes)
             titulo, urls = await asyncio.gather(self._titulo(s, manga_id, slug), self._resolver_http(s, manga_id))
             log_callback(f"[INFO] Title detected: {titulo}")

@@ -20,6 +20,7 @@ import aiohttp
 
 from .base import BaseSiteHandler
 from .. import config
+from ..http import crear_sesion
 from ..utils import clean_filename, download_and_make_pdf
 
 WEB = "https://hentai2read.com"
@@ -52,7 +53,7 @@ class H2RHandler(BaseSiteHandler):
     ) -> Optional[List[str]]:
         log_callback("[INIT] Processing Hentai2Read...")
         headers = {"User-Agent": config.USER_AGENT, "Referer": f"{WEB}/"}
-        async with aiohttp.ClientSession(headers=headers, timeout=aiohttp.ClientTimeout(total=30)) as s:
+        async with crear_sesion(headers=headers, timeout=aiohttp.ClientTimeout(total=30)) as s:
             async with s.get(url, allow_redirects=True) as r:
                 if r.status != 200:
                     log_callback(f"[ERROR] Hentai2Read respondió {r.status}.")

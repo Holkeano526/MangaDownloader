@@ -34,6 +34,7 @@ from urllib.parse import quote_plus, urljoin, urlparse
 import aiohttp
 
 from . import config
+from .http import SesionHTTP, crear_sesion
 
 TIMEOUT = aiohttp.ClientTimeout(total=20, connect=8)
 
@@ -154,7 +155,7 @@ def _enlaces(pagina: str, base: str, patron: str) -> List[Tuple[str, str, str]]:
 
 
 # ─── Buscadores por sitio ────────────────────────────────────────────────────
-async def _get(s: aiohttp.ClientSession, url: str, **kw) -> str:
+async def _get(s: SesionHTTP, url: str, **kw) -> str:
     async with s.get(url, **kw) as r:
         if r.status != 200:
             return ""
@@ -318,7 +319,7 @@ async def buscar(texto: str, minimo: float = 0.6, limite: int = 25) -> List[Resu
     for v in (texto, simple, clave):
         if v and v.lower() not in (x.lower() for x in variantes):
             variantes.append(v)
-    async with aiohttp.ClientSession(headers={"User-Agent": config.USER_AGENT}, timeout=TIMEOUT) as s:
+    async with crear_sesion(headers={"User-Agent": config.USER_AGENT}, timeout=TIMEOUT) as s:
         async def seguro(f, q):
             try:
                 return await f(s, q)
@@ -448,8 +449,8 @@ async def autor(url: str, titulo: str = "") -> Optional[str]:
         m = re.search(r"[-/](\d+)\.html", url)
         if m:
             try:
-                async with aiohttp.ClientSession(headers={"User-Agent": config.USER_AGENT,
-                                                          "Referer": "https://hitomi.la/"}, timeout=TIMEOUT) as s:
+                async with crear_sesion(headers={"User-Agent": config.USER_AGENT,
+                                                 "Referer": "https://hitomi.la/"}, timeout=TIMEOUT) as s:
                     t = await _get(s, f"https://ltn.gold-usergeneratedcontent.net/galleries/{m.group(1)}.js")
                 import json
                 info = json.loads(t[t.find("{"):]) if t else {}
@@ -461,7 +462,7 @@ async def autor(url: str, titulo: str = "") -> Optional[str]:
                 pass
     else:
         try:
-            async with aiohttp.ClientSession(headers={"User-Agent": config.USER_AGENT}, timeout=TIMEOUT) as s:
+            async with crear_sesion(headers={"User-Agent": config.USER_AGENT}, timeout=TIMEOUT) as s:
                 a = _autor_en_pagina(url, await _get(s, url))
             if a:
                 return a

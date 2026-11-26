@@ -21,9 +21,9 @@ Visto el 25/11/2026:
   nhentai.website  /read/<id>   t1.nhentai.jp.net/g/<media>/<n>x.webp    -> (lector)
   3hentai.net      /d/<id>      s1.3hentai.net/d<media>/<n>t.jpg         -> <n>.jpg  (mismo frontend)
 
-Los mirrors con desafío de Cloudflare (nhentai.net, nhentai.top) no se intentan saltar: se
-avisa con un mensaje claro. (El antiguo nhentai.py intentaba pasar Cloudflare ocultando la
-automatización del navegador; se eliminó en la limpieza del 26/11/2026.)
+Los mirrors con desafío de Cloudflare (nhentai.net, nhentai.top) pasan por la capa HTTP
+común (core/http.py), que reintenta con cloudscraper. Si el desafío sigue sin resolverse
+(captcha interactiva, Turnstile...), se avisa con un mensaje claro.
 """
 import asyncio
 import html
@@ -35,6 +35,7 @@ import aiohttp
 
 from .base import BaseSiteHandler
 from .. import config
+from ..http import crear_sesion, es_reto_cloudflare
 from ..utils import clean_filename, download_and_make_pdf
 
 EXT = r"(?:jpg|jpeg|png|webp|gif)"
@@ -45,7 +46,7 @@ class ErrorMirror(Exception):
 
 
 def _es_cloudflare(status: int, cuerpo: str) -> bool:
-    return status in (403, 503) and bool(re.search(r"just a moment|cf-chl|challenge-platform|cf_chl", cuerpo, re.I))
+    return es_reto_cloudflare(status, {}, cuerpo)
 
 
 class NHentaiMirrorHandler(BaseSiteHandler):
@@ -77,7 +78,7 @@ class NHentaiMirrorHandler(BaseSiteHandler):
         headers = {"User-Agent": config.USER_AGENT, "Referer": f"{origen}/"}
         timeout = aiohttp.ClientTimeout(total=30, connect=10)
         try:
-            async with aiohttp.ClientSession(headers=headers, timeout=timeout) as s:
+            async with crear_sesion(headers=headers, timeout=timeout) as s:
                 titulo, urls = await self._resolver(s, origen, ficha_url, gid, log_callback)
         except ErrorMirror as e:
             log_callback(f"[ERROR] {e}")
@@ -103,8 +104,8 @@ class NHentaiMirrorHandler(BaseSiteHandler):
         async with s.get(url, allow_redirects=True) as r:
             cuerpo = await r.text(errors="replace")
             if _es_cloudflare(r.status, cuerpo):
-                raise ErrorMirror(f"{urlparse(url).netloc} está protegido por Cloudflare (desafío anti-bots) "
-                                  f"y no se puede descargar automáticamente. Prueba con otro mirror de nhentai.")
+                raise ErrorMirror(f"{urlparse(url).netloc} sigue protegido por Cloudflare (desafío anti-bots) "
+                                  f"aun con cloudscraper. Prueba con otro mirror de nhentai.")
             if r.status == 404:
                 raise ErrorMirror(f"La galería no existe en {urlparse(url).netloc} (404). Los IDs cambian entre mirrors.")
             if r.status != 200:
