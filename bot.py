@@ -275,7 +275,9 @@ async def _entregar_pdf(channel, file_path: str, view: Optional[discord.ui.View]
         await channel.send(f"[WARN] `{filename}` ({size_mb:.2f}MB) exceeds limit. Uploading to GoFile...")
         link = await upload_to_gofile(file_path)
         if link:
-            _registrar_gofile(link, file_path)
+            # Solo los PDF que se quedan en la carpeta del bot (las traducciones son temporales)
+            if os.path.abspath(file_path).startswith(os.path.dirname(_GOFILE_INDEX)):
+                _registrar_gofile(link, file_path)
             if view is not None:
                 await channel.send(f"[SUCCESS] **{filename}**: {link}", view=view)
             else:
