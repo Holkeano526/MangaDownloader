@@ -264,7 +264,11 @@ async def _lectorhentai(s, q):
     res = []
     for u, t, img in _enlaces(p, "https://lectorhentai.com/", r"/manga/\d+"):
         # El texto de la tarjeta lleva tipo delante y fecha detrás: "Hentai Sin Censura <título> hace 3 días"
-        t = re.sub(r"^(?:Hentai|Manga|Doujinshi)(?:\s+Sin Censura)?\s+", "", t, flags=re.I)
+        m = re.match(r"^(?:Hentai|Manga|Doujinshi)(\s+Sin Censura)?\s+", t, flags=re.I)
+        if m:
+            t = t[m.end():]
+            if m.group(1) and not es_sin_censura(t):
+                t += " (Sin Censura)"
         t = re.sub(r"\s+(?:hace\s+\d+\s+\w+|\d{1,2}\s+\w{3}\s+\d{4})\s*$", "", t, flags=re.I)
         res.append(("lectorhentai", t, u, img))
     return res
@@ -410,6 +414,55 @@ async def buscar_codigo(gid: int) -> List[Resultado]:
                 return None
         res = await asyncio.gather(seguro(_codigo_nhentai), seguro(_codigo_hitomi))
     return [r for r in res if r]
+
+
+# ─── Versión sin censura ─────────────────────────────────────────────────────
+# Los sitios lo marcan en el título: "(Uncensored)", "[Decensored]", "(Sin Censura)", "(DC)",
+# "無修正"... (Hitomi con la etiqueta "uncensored": ver hitomi_http.info_galeria). Buscar la
+# palabra "uncensored" sin más devuelve cualquier obra sin censura, así que se busca el TÍTULO de
+# la obra y se quedan las versiones marcadas.
+_SIN_CENSURA = re.compile(r"\b(?:un|de)-?censor\w*|\bsin\s*censura|\bdescensurad\w*|無修正|\buncen\b|\(dc\)", re.I)
+# Palabras con las que el usuario pide la versión sin censura en !buscar
+PIDE_SIN_CENSURA = re.compile(r"\b(?:uncensored|decensored|sin\s+censura|uncen)\b", re.I)
+
+
+def es_sin_censura(titulo: str) -> bool:
+    return bool(_SIN_CENSURA.search(titulo or ""))
+
+
+def consulta_de_titulo(titulo: str) -> str:
+    """Título de una obra listo para buscarla en otros sitios: sin "| título alternativo", sin
+    etiquetas entre corchetes/paréntesis/llaves ni el sufijo del sitio."""
+    t = re.sub(r"\s*(?:\|\s*)?(?:Hitomi\.la|HentaiNexus|TMOHentai|nhentai)\s*$", "", titulo or "", flags=re.I)
+    t = re.sub(r"\[[^\]]*\]|\([^)]*\)|\{[^}]*\}", " ", t)
+    t = PIDE_SIN_CENSURA.sub(" ", t)
+    partes = [x.strip() for x in re.split(r"\s+\|\s+|\s{2,}", t) if x.strip()]
+    return re.sub(r"\s+", " ", partes[0] if partes else t).strip(" -_|")
+
+
+async def version_sin_censura(titulo: str, url_actual: str = "", limite: int = 50) -> Tuple[str, List[Resultado]]:
+    """(consulta usada, versiones sin censura de esa obra en todos los sitios). Busca el título
+    solo y con "uncensored" (el índice de Hitomi lo casa como palabra) y deja las que lo marcan y
+    se parecen al título (≥ 0,8: "Natsuzuma 3" no trae "Natsuzuma 2 (Uncensored)")."""
+    consulta = consulta_de_titulo(titulo)
+    if len(normalizar(consulta)) < 3:
+        return consulta, []
+    listas = await asyncio.gather(buscar(consulta, minimo=0.5, limite=100),
+                                  buscar(f"{consulta} uncensored", minimo=0.5, limite=100))
+    res, urls = [], set()
+    actual = url_actual.rstrip("/")
+    for r in (x for lista in listas for x in lista):
+        if r.url in urls or (actual and r.url.rstrip("/") == actual):
+            continue
+        if es_sin_censura(r.titulo) and parecido(consulta, r.titulo) >= 0.8:
+            urls.add(r.url)
+            # Cuantas menos palabras de más, antes: "Metamorphosis (Uncensored)" antes que
+            # "Slut Metamorphosis (Uncensored)" (el título limpio no lleva las etiquetas)
+            sobran = max(0, len(normalizar(r.titulo).split()) - len(normalizar(consulta).split()))
+            r.puntuacion = parecido(consulta, r.titulo) - 0.02 * min(sobran, 10)
+            res.append(r)
+    res.sort(key=lambda r: (-r.puntuacion, r.sitio))
+    return consulta, res[:limite]
 
 
 # ─── Idioma ──────────────────────────────────────────────────────────────────

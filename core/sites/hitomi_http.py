@@ -200,13 +200,17 @@ async def buscar_ids(texto: str, s: aiohttp.ClientSession) -> List[int]:
 
 async def info_galeria(gid: int, s: aiohttp.ClientSession, reglas: Optional["ReglasGG"] = None):
     """(título, url, portada, artistas, idioma, nº de páginas) de una galería de Hitomi.
-    None si la galería no existe (404)."""
+    None si la galería no existe (404). Si tiene la etiqueta "uncensored" y el título no lo dice,
+    se le añade " (Uncensored)" (para mostrarlo y para la búsqueda de la versión sin censura)."""
     async with s.get(f"{LTN}/galleries/{gid}.js", headers={"Referer": "https://hitomi.la/"}) as r:
         if r.status != 200:
             return None
         texto = await r.text()
     info = json.loads(texto[texto.find("{"):])
     titulo = info.get("title") or f"Hitomi {gid}"
+    etiquetas = {str(t.get("tag", "")).lower() for t in info.get("tags") or [] if isinstance(t, dict)}
+    if "uncensored" in etiquetas and not re.search(r"uncensor|decensor", titulo, re.I):
+        titulo += " (Uncensored)"
     tipo = info.get("type") or "doujinshi"
     portada = ""
     archivos = info.get("files") or []
