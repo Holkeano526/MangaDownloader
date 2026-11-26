@@ -10,3 +10,4 @@ from .shademanga import ShadeMangaHandler
 from .tmohentai_app import TMOHentaiAppHandler
 from .lectorhentai import LectorHentaiHandler
 from .hentainexus import HentaiNexusHandler
+from .nhentai_mirrors import NHentaiMirrorHandler

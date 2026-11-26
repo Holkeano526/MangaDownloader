@@ -19,6 +19,7 @@ from .sites import (
     TMOHentaiAppHandler,
     LectorHentaiHandler,
     HentaiNexusHandler,
+    NHentaiMirrorHandler,
 )
 
 # Instantiate handlers (Stateless approach)
@@ -32,6 +33,7 @@ HANDLERS = [
     H2RHandler(),
     HitomiHandler(),
     NHentaiHandler(),
+    NHentaiMirrorHandler(),  # resto de dominios nhentai.* (to, xxx, website...)
     ZonaTMOHandler(),
     FakkuHandler(),
     HentalkHandler(),
