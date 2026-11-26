@@ -710,10 +710,16 @@ def _fuente(r) -> str:
     return f"{busqueda.BANDERA.get(r.idioma, '🏳️')} [{r.sitio}]({r.url})"
 
 
-def _embed_serie(serie, n_serie: int, actual_url: str = ""):
+def _embed_serie(serie, n_serie: int, actual_url: str = "", hasta=None):
     embed = discord.Embed(title=f"📚 {serie.nombre}"[:256], color=discord.Color.teal())
     if serie.artista:
         embed.description = f"✍️ {serie.artista[:200]}"
+    es_la_descargada = actual_url and any(r.url == actual_url for p in serie.partes for r in p.resultados)
+    if hasta is not None and (es_la_descargada or n_serie == 0):
+        n = int(hasta) if float(hasta).is_integer() else hasta
+        hay_mas = any(not any(r.url == actual_url for r in p.resultados) for p in serie.partes)
+        embed.set_footer(text=f"Ya tienes hasta la parte {n}: solo se muestran las siguientes." if hay_mas else
+                         f"Ya tienes hasta la parte {n}. No se encontraron partes posteriores en los sitios compatibles.")
     for parte in serie.partes[:24]:
         marca = " ✅ *(la que descargaste)*" if actual_url and any(r.url == actual_url for r in parte.resultados) else ""
         fuentes = " · ".join(_fuente(r) for r in parte.resultados[:6])
@@ -777,14 +783,15 @@ class SeriesView(discord.ui.View):
                                                         view=vista, wait=True)
 
 
-async def enviar_series(destino, ctx, texto: str, series, todos, segundos: float, actual_url: str = ""):
+async def enviar_series(destino, ctx, texto: str, series, todos, segundos: float, actual_url: str = "",
+                        hasta=None):
     """Un embed por serie (máx. 3) con su portada; menú para descargar y botón de lista completa."""
     embeds, archivos = [], []
     async with aiohttp.ClientSession(headers={"User-Agent": core.config.USER_AGENT},
                                      timeout=aiohttp.ClientTimeout(total=15)) as s:
         portadas = await asyncio.gather(*(_bajar_portada(s, serie.partes[0].resultados[0]) for serie in series[:3]))
     for i, (serie, portada) in enumerate(zip(series[:3], portadas)):
-        e = _embed_serie(serie, i, actual_url)
+        e = _embed_serie(serie, i, actual_url, hasta)
         if portada:
             nombre = f"serie_{i}.{portada[1]}"
             archivos.append(discord.File(io.BytesIO(portada[0]), filename=nombre))
@@ -808,7 +815,9 @@ async def informar_autor_y_continuaciones(ctx, titulo: str, url: str):
         series, todos, _ = await agrupador.series_para(base, actual=titulo,
                                                        artista=(autor or "").split(",")[0].strip() or None)
         if series:
-            await enviar_series(ctx, ctx, base, series, todos, time.time() - t0, actual_url=url)
+            # Si bajaste "1-3", no ofrecer otra vez la 1, la 2 ni la 3: solo lo posterior
+            series, hasta = agrupador.solo_posteriores(series, url, titulo)
+            await enviar_series(ctx, ctx, base, series, todos, time.time() - t0, actual_url=url, hasta=hasta)
             return
     except Exception as e:
         print(f"[WARN] Agrupar series tras descarga: {e}")

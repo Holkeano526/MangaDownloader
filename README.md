@@ -55,6 +55,7 @@ menú *Descargar una parte* y 📋 *Ver todos los resultados* en las búsquedas.
 | hentalk.pw (y enlaces fakku.cc) | ✅ | ✅ | Navegador |
 | shademanga | ✅ | — | Navegador |
 | nhentai.net · nhentai.top | ⚠️ | — | Protegidos por Cloudflare: el bot avisa y sugiere un espejo. **No se intenta saltar la protección.** |
+| chochox.com · vercomicsporno.com | ⚠️ | — | Desafío de Cloudflare en todas sus páginas (incluso `robots.txt` y `/wp-json`): el bot explica el motivo. |
 
 ## Configuración
 
@@ -131,7 +132,10 @@ Ver [HOW_TO_ADD_SITES.md](HOW_TO_ADD_SITES.md).
 
 ## Límites
 
-- Los sitios con Cloudflare/anti-bot (nhentai.net, nhentai.top) no se descargan: se avisa al usuario.
+- Los sitios con Cloudflare/anti-bot (nhentai.net, nhentai.top, chochox.com, vercomicsporno.com) no se
+  descargan: se avisa al usuario.
+- Tras una descarga solo se ofrecen las partes posteriores: si bajaste el recopilatorio "1-3", el menú
+  empieza en la 4.
 - Los sitios cambian su HTML; si un handler HTTP deja de funcionar, los que tienen respaldo pasan al navegador
   y el resto da un error claro en el log.
 - La agrupación con IA depende de DeepSeek; en horas punta (UTC 01–04 y 06–10, lun–vie) el precio es ×2.

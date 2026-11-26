@@ -69,5 +69,14 @@ async def process_entry(
         supported = handler.get_supported_domains()
         if any(domain in hostname for domain in handler.get_supported_domains()):
             return await handler.process(url, log_callback, check_cancel, progress_callback)
-            
+
+    if any(d in hostname for d in BLOQUEADOS_CLOUDFLARE):
+        log_callback(f"[ERROR] {hostname} está protegido por Cloudflare (desafío anti-bots en todas sus páginas) "
+                     f"y no se puede descargar automáticamente. Busca la obra con !buscar en los sitios compatibles.")
+        return
     log_callback("[ERROR] Unsupported website.")
+
+
+# Sitios pedidos que responden con el desafío de Cloudflare ("Just a moment", 403) incluso en
+# robots.txt, el feed y /wp-json. No se intenta saltar la protección: solo se explica el motivo.
+BLOQUEADOS_CLOUDFLARE = ("chochox.com", "vercomicsporno.com")
