@@ -78,71 +78,156 @@ def _find_pdf_fast(filename: str) -> Optional[str]:
 
 class DiscordLogAdapter:
     """
-    Redirects core logs to an editable Discord message.
-    Automatically detects generated PDFs for upload.
-    Uses O(1) indexed lookup instead of recursive os.walk.
+    Muestra el progreso de una descarga en un embed limpio que se va editando
+    (mismo estilo que la traducción): título, fase, barra, páginas, velocidad y
+    tiempo restante. Detecta los PDF generados en los logs del core para subirlos.
     """
-    def __init__(self, ctx):
+    def __init__(self, ctx, url: str = ""):
         self.ctx = ctx
+        self.url = url
         self.message = None
         self.logs = []
-        self.last_update_time = 0
-        self.update_interval = 2.0 
-        self.generated_files = [] 
-        self.accumulated_logs = []
+        self.generated_files = []
+        self.titulo = None
+        self.fase = "Preparando..."
+        self.actual = 0
+        self.total = 0
+        self.inicio = time.time()
+        self.inicio_descarga = None
+        self.errores = 0
+        self._ultima_edicion = 0.0
+        self._ultima_fase = ""
 
     async def initialize(self):
-        embed = discord.Embed(title="[+] Starting download...", color=discord.Color.blue())
-        self.message = await self.ctx.send(embed=embed)
+        self.message = await self.ctx.send(embed=self._embed())
+
+    # --- Construcción del embed ---------------------------------------------
+    def _embed(self, color=None, titulo=None) -> discord.Embed:
+        nombre = self.titulo or "manga"
+        embed = discord.Embed(
+            title=(titulo or f"📥 Descargando: {nombre}")[:250],
+            color=color or discord.Color.blue(),
+        )
+        lineas = [f"**{self.fase}**"]
+        if self.total:
+            lineas.append(f"`{_barra(self.actual, self.total)}` {self.actual}/{self.total} páginas")
+            if self.inicio_descarga and self.actual and self.actual < self.total:
+                velocidad = self.actual / max(0.1, time.time() - self.inicio_descarga)
+                restante = (self.total - self.actual) / max(velocidad, 0.01)
+                lineas.append(f"{velocidad:.1f} páginas/s · quedan ~{_fmt_tiempo(restante)}")
+        if self.errores:
+            lineas.append(f"⚠️ {self.errores} aviso(s) de descarga (se reintentan)")
+        embed.description = "\n".join(lineas)
+        embed.set_footer(text=f"Pedido por {self.ctx.author.display_name}")
+        return embed
+
+    async def _editar(self, forzar: bool = False, **kw):
+        if not self.message:
+            return
+        ahora = time.time()
+        if not forzar and self.fase == self._ultima_fase and ahora - self._ultima_edicion < 3:
+            return  # no saturar la API de Discord
+        self._ultima_edicion, self._ultima_fase = ahora, self.fase
+        try:
+            await self.message.edit(embed=self._embed(**kw))
+        except discord.errors.HTTPException:
+            pass
+
+    def _programar(self, forzar: bool = False):
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+        if loop is bot.loop:
+            bot.loop.create_task(self._editar(forzar))
+        else:  # llamado desde un hilo (p. ej. creación del PDF)
+            asyncio.run_coroutine_threadsafe(self._editar(forzar), bot.loop)
+
+    # --- Callbacks que usa el core -----------------------------------------
+    def progress_callback(self, current: int, total: int):
+        if self.inicio_descarga is None:
+            self.inicio_descarga = time.time()
+        self.actual, self.total = current, total
+        self.fase = "Descargando páginas..."
+        self._programar()
 
     def log_callback(self, text: str):
-        print(f"[INTERNAL LOG] {text}") 
-        self.logs.append(text)
-        
-        if len(self.logs) > 10:
-            self.logs.pop(0)
+        print(f"[INTERNAL LOG] {text}")
+        self.logs = (self.logs + [text])[-10:]
+        forzar = False
 
-        # Detect generated PDF from core logs
-        # Format: [SUCCESS] PDF Generated: file.pdf
-        match = re.search(r"\[SUCCESS\] PDF Generated: (.*)", text)
-        if match:
-            filename = match.group(1).strip()
-            
+        if m := re.search(r"Title detected: (.+)", text):
+            self.titulo = m.group(1).strip()
+            forzar = True
+        elif m := re.search(r"Images detected: (\d+)", text):
+            n = int(m.group(1))
+            if n and n < 9999:
+                self.total = n
+            self.fase = "Descargando páginas..."
+            forzar = True
+        elif "Generating PDF" in text:
+            self.fase = "Generando el PDF..."
+            if self.total:
+                self.actual = self.total
+            forzar = True
+        elif "[INIT]" in text or "Opening reader" in text:
+            self.fase = "Abriendo la página..."
+        elif "[WARN]" in text and ("Retrying" in text or "got" in text):
+            self.errores += 1
+        elif "[ERROR]" in text:
+            self.errores += 1
+
+        # PDF generado: "[SUCCESS] PDF Generated: file.pdf"
+        if m := re.search(r"\[SUCCESS\] PDF Generated: (.*)", text):
+            filename = m.group(1).strip()
             if os.path.isabs(filename) and os.path.exists(filename):
                 self.generated_files.append(filename)
-                print(f"[BOT FILE DETECTED ABS] {filename}")
             else:
-                # O(1) indexed lookup instead of recursive os.walk
                 result = _find_pdf_fast(filename)
                 if result:
                     self.generated_files.append(result)
-                    print(f"[BOT FILE DETECTED INDEX] {result}")
                 elif os.path.exists(filename):
                     self.generated_files.append(filename)
-                    print(f"[BOT FILE DETECTED LOCAL] {filename}")
 
-        import time
-        current_time = time.time()
-        
-        is_urgent = "[DONE]" in text or "[ERROR]" in text
-        
-        if is_urgent or (current_time - self.last_update_time) > self.update_interval:
-            self.last_update_time = current_time
-            asyncio.run_coroutine_threadsafe(self.update_discord_message(), bot.loop)
+        self._programar(forzar)
 
-    async def update_discord_message(self):
-        if not self.message: return
-        
-        log_text = "\n".join(self.logs)
-        log_text = f"```\n{log_text}\n```"
-        
-        embed = self.message.embeds[0]
-        embed.description = log_text
-        
-        try:
-            await self.message.edit(embed=embed)
-        except discord.errors.HTTPException:
-            pass 
+    async def finalizar(self, ok: bool):
+        duracion = _fmt_tiempo(time.time() - self.inicio)
+        if ok:
+            tam = sum(os.path.getsize(f) for f in self.generated_files if os.path.exists(f)) / (1024 * 1024)
+            self.fase = f"Listo en {duracion} · {self.total or '?'} páginas · {tam:.1f} MB"
+            self.actual = self.total
+            self.errores = 0
+            await self._editar(True, color=discord.Color.green(),
+                               titulo=f"✅ Descargado: {self.titulo or 'manga'}")
+        else:
+            detalle = "\n".join(l for l in self.logs if "[ERROR]" in l or "[WARN]" in l)[-900:]
+            self.fase = f"No se generó ningún PDF ({duracion})"
+            await self._editar(True, color=discord.Color.red(),
+                               titulo=f"❌ Falló la descarga: {self.titulo or self.url}"[:250])
+            if detalle:
+                emb = self.message.embeds[0] if self.message and self.message.embeds else None
+                if emb is not None:
+                    emb.add_field(name="Detalle", value=f"```\n{detalle}\n```", inline=False)
+                    try:
+                        await self.message.edit(embed=emb)
+                    except discord.errors.HTTPException:
+                        pass
+
+
+def _fmt_tiempo(seg: float) -> str:
+    seg = int(seg)
+    if seg < 60:
+        return f"{seg}s"
+    m, s = divmod(seg, 60)
+    return f"{m}m {s:02d}s" if m < 60 else f"{m // 60}h {m % 60:02d}m"
+
+
+def _barra(actual: int, total: int, ancho: int = 20) -> str:
+    if not total:
+        return ""
+    llenos = round(ancho * min(actual, total) / total)
+    return "█" * llenos + "░" * (ancho - llenos)
 
 _gofile_token: Optional[str] = None
 _gofile_root: Optional[str] = None
@@ -292,11 +377,6 @@ async def _entregar_pdf(channel, file_path: str, view: Optional[discord.ui.View]
     return None
 
 
-def _barra(actual: int, total: int, ancho: int = 20) -> str:
-    if not total:
-        return ""
-    llenos = round(ancho * actual / total)
-    return "█" * llenos + "░" * (ancho - llenos)
 
 
 async def traducir_y_entregar(channel, ruta_pdf: str, solicitante: str, borrar_al_final: bool = False) -> None:
@@ -407,56 +487,43 @@ async def descargar(ctx, url: str):
         await ctx.send("Please provide a URL.")
         return
 
-    logger = DiscordLogAdapter(ctx)
+    logger = DiscordLogAdapter(ctx, url)
+    if download_semaphore.locked():
+        logger.fase = "En cola (hay 3 descargas en marcha)..."
     await logger.initialize()
-    
+
     stop_event = False
     def check_cancel(): return stop_event
 
-    def progress_adapter(current, total): pass
-
     try:
-        # Use semaphore to allow up to 3 concurrent downloads
-        if download_semaphore.locked():
-            await ctx.send("⏳ Solicitud recibida. Esperando en cola...")
-        else:
-            await ctx.send("⏳ Iniciando descarga...")
         async with download_semaphore:
+            logger.fase = "Abriendo la página..."
+            await logger._editar(True)
             result = await core.process_entry(
-                url, 
-                logger.log_callback, 
-                check_cancel, 
-                progress_callback=progress_adapter
+                url,
+                logger.log_callback,
+                check_cancel,
+                progress_callback=logger.progress_callback,
             )
-            
+
         if isinstance(result, list):
-            await ctx.send(f"📚 **Serie detectada**. Se encontraron **{len(result)} capítulos**. Añadiéndolos a la cola...")
+            logger.fase = f"Serie con {len(result)} capítulos: se descargan uno a uno"
+            await logger._editar(True, color=discord.Color.blurple(), titulo="📚 Serie detectada")
             for sub_url in result:
-                # Disparamos cada capítulo como una solicitud individual
-                # Esto creará un mensaje de Discord para cada uno y respetará el semaphore global.
+                # Cada capítulo es una solicitud propia (su embed) y respeta el semáforo global
                 bot.loop.create_task(ctx.invoke(descargar, url=sub_url))
             return
-        
-        await asyncio.sleep(1)
-        
-        embed = logger.message.embeds[0]
-        
-        if logger.generated_files:
-            embed.title = "[SUCCESS] Download Finished"
-            embed.color = discord.Color.green()
-            await logger.message.edit(embed=embed)
-            
-            for file_path in logger.generated_files:
-                filename = os.path.basename(file_path)
-                try:
-                    # Discord (8MB safe limit) o GoFile, con botón para traducirlo con MangaScan
-                    await _entregar_pdf(ctx.channel, file_path, view=TraducirView(file_path))
-                except Exception as e:
-                    await ctx.send(f"Error processing file `{filename}`: {e}")
-        else:
-            embed.title = "[ERROR] Process finished without files"
-            embed.color = discord.Color.red()
-            await logger.message.edit(embed=embed)
+
+        await asyncio.sleep(0.5)
+        await logger.finalizar(bool(logger.generated_files))
+
+        for file_path in logger.generated_files:
+            filename = os.path.basename(file_path)
+            try:
+                # Discord (8MB safe limit) o GoFile, con botón para traducirlo con MangaScan
+                await _entregar_pdf(ctx.channel, file_path, view=TraducirView(file_path))
+            except Exception as e:
+                await ctx.send(f"Error processing file `{filename}`: {e}")
 
     except Exception as e:
         await ctx.send(f"Critical error: {e}")

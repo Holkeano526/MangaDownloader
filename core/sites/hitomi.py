@@ -13,10 +13,11 @@ from playwright.async_api import async_playwright
 
 from .base import BaseSiteHandler
 from .. import config
-from ..utils import async_finalize_pdf_flow, clean_filename
+from ..utils import async_finalize_pdf_flow, clean_filename, descargar_imagenes
 
-# Semaphore for parallel downloads (2 concurrent to avoid bans)
-DOWNLOAD_SEMAPHORE = asyncio.Semaphore(2)
+# Las imágenes se descargan con aiohttp y un límite POR galería (config.CONCURRENCIA_IMAGENES).
+# Antes: semáforo GLOBAL de 2 compartido por todas las descargas del bot y peticiones a
+# través del navegador (page.request), con el navegador abierto hasta el final.
 
 
 class HitomiHandler(BaseSiteHandler):
@@ -59,6 +60,8 @@ class HitomiHandler(BaseSiteHandler):
         os.makedirs(temp_dir, exist_ok=True)
 
         download_targets = []
+        image_urls = []
+        title = f"Hitomi_{gallery_id}"
 
         async with async_playwright() as p:
             # Headless mode: respect env vars for Docker/Discord/Linux compatibility
@@ -81,7 +84,13 @@ class HitomiHandler(BaseSiteHandler):
                 reader_url = f"https://hitomi.la/reader/{gallery_id}.html#1"
                 log_callback(f"[INFO] Opening reader: {reader_url}")
                 await page.goto(reader_url, wait_until="domcontentloaded")
-                await page.wait_for_timeout(3000)
+
+                try:
+                    await page.wait_for_function(
+                        "() => typeof window.galleryinfo !== 'undefined'", timeout=15000
+                    )
+                except Exception:
+                    pass
 
                 # Extract title
                 title = f"Hitomi_{gallery_id}"
@@ -181,76 +190,23 @@ class HitomiHandler(BaseSiteHandler):
                         f"[INFO] Page-by-page extracted {total_images} image URLs."
                     )
 
-                # Step 4: Parallel downloads with semaphore and retries
-                completed_count = [0]
-
-                async def download_page(idx: int, img_url: str) -> Optional[str]:
-                    async with DOWNLOAD_SEMAPHORE:
-                        if check_cancel():
-                            return None
-
-                        max_retries = 3
-                        for attempt in range(max_retries):
-                            try:
-                                headers = {
-                                    "Referer": f"https://hitomi.la/reader/{gallery_id}.html"
-                                }
-                                response = await page.request.get(
-                                    img_url, headers=headers
-                                )
-                                if response.status == 200:
-                                    data = await response.body()
-                                    ext = img_url.split(".")[-1].split("?")[0]
-                                    if ext not in ("jpg", "jpeg", "png", "webp", "gif", "avif"):
-                                        ext = "webp"
-                                    filepath = os.path.join(temp_dir, f"{idx:03d}.{ext}")
-
-                                    def _write_file():
-                                        with open(filepath, "wb") as f:
-                                            f.write(data)
-
-                                    await asyncio.to_thread(_write_file)
-
-                                    completed_count[0] += 1
-                                    if progress_callback:
-                                        progress_callback(
-                                            completed_count[0], total_images
-                                        )
-                                    return filepath
-                                elif response.status in (503, 429, 403):
-                                    log_callback(
-                                        f"[WARN] Page {idx} got {response.status}. Retrying {attempt+1}/{max_retries}..."
-                                    )
-                                    await asyncio.sleep(4 * (attempt + 1))  # Exponential backoff
-                                else:
-                                    log_callback(
-                                        f"[ERROR] Page {idx} failed with status {response.status}"
-                                    )
-                                    return None
-                            except Exception as e:
-                                log_callback(
-                                    f"[WARN] Error downloading page {idx}: {e}. Retrying {attempt+1}/{max_retries}..."
-                                )
-                                await asyncio.sleep(4 * (attempt + 1))
-
-                        log_callback(f"[ERROR] Page {idx} failed permanently after {max_retries} retries.")
-                        return None
-
-                # Launch all download tasks concurrently (controlled by semaphore)
-                tasks = [
-                    download_page(i + 1, url) for i, url in enumerate(image_urls)
-                ]
-                results = await asyncio.gather(*tasks)
-                download_targets = [r for r in results if r is not None]
-
-                log_callback(
-                    f"\n[INFO] Download finished. {len(download_targets)} images retrieved."
-                )
+                # (las imágenes se descargan después de cerrar el navegador)
 
             except Exception as e:
                 log_callback(f"[ERROR] Playwright global error: {e}")
             finally:
                 await browser.close()
+
+        # Step 4: descarga paralela con aiohttp, con el navegador ya cerrado (libera RAM)
+        if image_urls:
+            log_callback(f"[INFO] Images detected: {len(image_urls)}")
+            headers = {"Referer": f"https://hitomi.la/reader/{gallery_id}.html", "User-Agent": config.USER_AGENT}
+            download_targets = await descargar_imagenes(
+                image_urls, temp_dir, headers, log_callback, check_cancel, progress_callback
+            )
+            log_callback(f"\n[INFO] Download finished. {len(download_targets)} images retrieved.")
+            if len(download_targets) < len(image_urls):
+                log_callback(f"[WARN] {len(image_urls) - len(download_targets)} de {len(image_urls)} páginas no se pudieron descargar.")
 
         # Generate PDF via async utils (non-blocking)
         if download_targets:
