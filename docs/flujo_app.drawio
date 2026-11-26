@@ -67,7 +67,7 @@
         <mxCell id="gofile" value="&lt;b&gt;GoFile&lt;/b&gt; (enlace)&lt;br&gt;&lt;font style=&quot;font-size:10px&quot;&gt;se apunta en PDF/.gofile_index.json&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#c2410c;fontSize=12;" vertex="1" parent="carril_ent">
           <mxGeometry x="200" y="92" width="200" height="48" as="geometry" />
         </mxCell>
-        <mxCell id="info" value="&lt;b&gt;Mensaje de autor y continuaciones&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;series y partes (✅ la descargada) con fuentes por idioma&lt;br&gt;y menú para descargar otra parte&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffedd5;strokeColor=#c2410c;fontSize=12;" vertex="1" parent="carril_ent">
+        <mxCell id="info" value="&lt;b&gt;Autor + botones&lt;/b&gt; (solo buscan si los pulsas)&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;🔎 Buscar continuación → series y partes con fuentes por idioma&lt;br&gt;✍️ Más obras del autor → lista de tarjetas&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffedd5;strokeColor=#c2410c;fontSize=12;" vertex="1" parent="carril_ent">
           <mxGeometry x="20" y="170" width="380" height="80" as="geometry" />
         </mxCell>
         <mxCell id="boton_trad" value="🌐 botón&lt;br&gt;Traducir" style="ellipse;whiteSpace=wrap;html=1;fillColor=#ede9fe;strokeColor=#7c3aed;fontSize=12;" vertex="1" parent="carril_ent">
@@ -83,7 +83,7 @@
         <mxCell id="busq" value="&lt;b&gt;Búsqueda en 14 sitios a la vez&lt;/b&gt; · core/busqueda.py&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;Hitomi (índice binario) · hentainexus · nhentai ×3 · 3hentai · hentai2read · m440 · hentalk · tmohentai · lectorhentai · imhentai · allporncomic · sexkomix2&lt;br&gt;idioma de cada resultado · portadas&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e0f2fe;strokeColor=#0284c7;fontSize=12;" vertex="1" parent="carril_bus">
           <mxGeometry x="20" y="36" width="560" height="74" as="geometry" />
         </mxCell>
-        <mxCell id="artista" value="+ obras del &lt;b&gt;artista&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:10px&quot;&gt;une partes con títulos distintos&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#0284c7;fontSize=12;" vertex="1" parent="carril_bus">
+        <mxCell id="artista" value="✍️ Más obras del &lt;b&gt;autor&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:10px&quot;&gt;solo si lo pides (botón o menú)&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#0284c7;fontSize=12;dashed=1;" vertex="1" parent="carril_bus">
           <mxGeometry x="20" y="135" width="200" height="56" as="geometry" />
         </mxCell>
         <mxCell id="deepseek" value="&lt;b&gt;DeepSeek&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:10px&quot;&gt;deepseek-flash · agrupa series y partes&lt;br&gt;(no puede inventar: se validan los índices)&lt;/font&gt;" style="ellipse;whiteSpace=wrap;html=1;fillColor=#ff6b35;strokeColor=#c2410c;fontColor=#ffffff;fontSize=12;" vertex="1" parent="carril_bus">
@@ -96,8 +96,8 @@
           <mxGeometry x="482" y="125" width="98" height="76" as="geometry" />
         </mxCell>
         <mxCell id="b4" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#ca8a04;endArrow=block;exitX=0.5;exitY=1;entryX=0.95;entryY=0;" edge="1" parent="carril_bus" source="codigo" target="vistas"><mxGeometry relative="1" as="geometry" /></mxCell>
-        <mxCell id="b1" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#0284c7;endArrow=block;exitX=0.2;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="carril_bus" source="busq" target="artista"><mxGeometry relative="1" as="geometry" /></mxCell>
-        <mxCell id="b2" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#0284c7;endArrow=block;" edge="1" parent="carril_bus" source="artista" target="deepseek"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="b1" value="a petición" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#0284c7;endArrow=block;dashed=1;fontSize=9;labelBackgroundColor=#f0f9ff;exitX=0.2;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="carril_bus" source="busq" target="artista"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="b2" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#0284c7;endArrow=block;exitX=0.8;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="carril_bus" source="busq" target="deepseek"><mxGeometry relative="1" as="geometry" /></mxCell>
         <mxCell id="b3" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#0284c7;endArrow=block;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="carril_bus" source="deepseek" target="vistas"><mxGeometry relative="1" as="geometry" /></mxCell>
 
         <!-- TRADUCCION -->

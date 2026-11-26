@@ -46,9 +46,10 @@ MangaDownloader y MangaScan AI son **dos repos hermanos**: se desarrollan y desp
    mientras llegan; luego `img2pdf` arma el PDF.
 2. **Entrega.** Si el PDF pesa ≤ 7,9 MB se adjunta en Discord; si no, se sube a **GoFile** y se apunta en
    `PDF/.gofile_index.json`. Junto al PDF aparece el botón **🌐 Traducir**.
-3. **Autor y continuaciones.** Tras cada descarga el bot busca el autor y las otras partes de la serie en
-   todos los sitios, y las muestra agrupadas (series › partes › fuentes por idioma) con un menú para
-   descargarlas.
+3. **Autor y continuaciones (a petición).** Tras cada descarga el bot muestra el autor y dos botones:
+   **🔎 Buscar continuación** (las otras partes de la serie en todos los sitios, agrupadas en series › partes ›
+   fuentes por idioma, con un menú para descargarlas) y **✍️ Más obras de &lt;autor&gt;**. No busca nada hasta
+   que pulsas uno.
 4. **Traducción.** El bot sube el PDF local a MangaScan por la LAN (sin el límite de Discord), sigue el
    progreso y devuelve el PDF traducido por Discord o GoFile.
 
@@ -57,13 +58,16 @@ MangaDownloader y MangaScan AI son **dos repos hermanos**: se desarrollan y desp
 | Comando | Qué hace |
 |---|---|
 | `!descargar <url>` | Descarga a PDF. Acepta una ficha, un lector o una serie (pone sus capítulos en cola). Con un código numérico (`!descargar 177013`) **no descarga directo**: muestra las mismas opciones que `!buscar 177013` para que elijas el sitio. |
-| `!buscar <título>` | Busca en los 14 sitios, suma las obras del artista y agrupa con DeepSeek en series › partes › fuentes (🇪🇸 primero, luego 🇬🇧). Si la IA falla, muestra una lista paginada de tarjetas con portada. Funciona sin número de parte: `!buscar The Wife-Lenders`. |
+| `!buscar <título>` | Busca ese título en los 14 sitios y agrupa con DeepSeek en series › partes › fuentes (🇪🇸 primero, luego 🇬🇧). Si la IA falla, muestra una lista paginada de tarjetas con portada. Funciona sin número de parte: `!buscar The Wife-Lenders`. **No** suma las demás obras del autor: eso se pide con *Más obras del autor*. |
 | `!buscar <código>` | Código numérico de nhentai / Hitomi ("nuclear code"): `!buscar 177013` o `!buscar #177013`. Ver [Búsqueda por código](#búsqueda-por-código). |
 | `!traducir <enlace GoFile \| nombre.pdf>` | Traduce con MangaScan un PDF que el bot ya descargó (por su enlace de GoFile o su nombre). También acepta un PDF adjunto al mensaje. |
 | `!help` | Ayuda. |
 
 **Botones:** ⏹️ Cancelar (descarga y traducción; no deja PDFs a medias), 🌐 Traducir (en cada PDF entregado),
-menú *Descargar una parte* y 📋 *Ver todos los resultados* en las búsquedas.
+🔎 *Buscar continuación* y ✍️ *Más obras de &lt;autor&gt;* (tras cada descarga), menú *Descargar una parte*,
+✍️ *Más obras de &lt;artista&gt;* y 📋 *Ver todos los resultados* en las series. En la lista de tarjetas (también
+la de `!buscar <código>`): menús *Elige uno para descargarlo*, *🔎 Buscar continuación de…* y *✍️ Más obras
+del autor de…*.
 
 ### Búsqueda por código
 

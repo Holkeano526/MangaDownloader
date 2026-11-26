@@ -76,11 +76,13 @@ def artista_probable(resultados: List["busqueda.Resultado"]) -> Optional[str]:
     return next(n for n in nombres if n.lower() == nombre) if veces >= 2 or len(nombres) == 1 else None
 
 
-async def candidatos(texto: str, artista: Optional[str] = None) -> tuple:
-    """(resultados por texto ∪ obras del artista, artista usado). Sin duplicados de URL."""
+async def candidatos(texto: str, artista: Optional[str] = None, con_artista: bool = False) -> tuple:
+    """(resultados por texto [∪ obras del artista], artista usado). Sin duplicados de URL.
+    Las obras del artista solo se suman con con_artista=True: el usuario las pide aparte con el
+    botón «Más obras del autor» (buscar un título concreto no debe traer todo el catálogo)."""
     por_texto = await busqueda.buscar(texto, limite=50)
     artista = artista or artista_probable(por_texto)
-    if artista and busqueda.normalizar(artista) not in busqueda.normalizar(texto):
+    if con_artista and artista and busqueda.normalizar(artista) not in busqueda.normalizar(texto):
         por_artista = await busqueda.buscar(artista, limite=50)
     else:
         por_artista = []
@@ -205,8 +207,9 @@ def solo_posteriores(series: List[Serie], actual_url: str, actual_titulo: str = 
     return series, hasta
 
 
-async def series_para(texto: str, actual: Optional[str] = None, artista: Optional[str] = None):
+async def series_para(texto: str, actual: Optional[str] = None, artista: Optional[str] = None,
+                      con_artista: bool = False):
     """Todo el flujo: candidatos + agrupación. Devuelve (series o None, candidatos, artista)."""
-    lista, artista = await candidatos(texto, artista)
+    lista, artista = await candidatos(texto, artista, con_artista)
     series = await agrupar(texto, lista, actual) if lista else None
     return series, lista, artista
