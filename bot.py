@@ -607,7 +607,7 @@ async def descargar(ctx, url: str):
 
 # ─── Búsqueda, autor y continuaciones ─────────────────────────────────────────
 ICONO_SITIO = {"hentainexus": "🟣", "nhentai.to": "🔴", "nhentai.xxx": "🔴", "nhentai.website": "🔴",
-               "tmohentai.app": "🟠", "lectorhentai": "🟢", "hitomi": "🔵", "3hentai": "🟡"}
+               "tmohentai.app": "🟠", "lectorhentai": "🟢", "hitomi": "🔵", "3hentai": "🟡", "hentai2read": "🟤", "m440": "⚫"}
 
 
 def _linea_resultado(i: int, r: "busqueda.Resultado") -> str:
@@ -616,7 +616,7 @@ def _linea_resultado(i: int, r: "busqueda.Resultado") -> str:
 
 COLOR_SITIO = {"hentainexus": 0x9b59b6, "nhentai.to": 0xe74c3c, "nhentai.xxx": 0xe74c3c, "nhentai.website": 0xe74c3c,
                "tmohentai.app": 0xe67e22, "lectorhentai": 0x2ecc71, "hitomi": 0x3498db,
-               "3hentai": 0xf1c40f}
+               "3hentai": 0xf1c40f, "hentai2read": 0x8e5a3c, "m440": 0x34495e}
 
 
 async def _bajar_portada(session: aiohttp.ClientSession, r) -> Optional[tuple]:
@@ -745,8 +745,8 @@ async def buscar_cmd(ctx, *, texto: Optional[str] = None):
         return
     texto = texto.strip()
     espera = await ctx.send(embed=discord.Embed(title=f"🔎 Buscando «{texto[:200]}»...",
-                                                description="hentainexus · nhentai (to, xxx, website) · 3hentai · "
-                                                            "tmohentai · lectorhentai",
+                                                description="Hitomi · hentainexus · nhentai (to, xxx, website) · 3hentai · "
+                                                            "hentai2read · m440 · tmohentai · lectorhentai",
                                                 color=discord.Color.blue()))
     t0 = time.time()
     resultados = await busqueda.buscar(texto)
@@ -759,7 +759,7 @@ async def buscar_cmd(ctx, *, texto: Optional[str] = None):
     sitios = sorted({r.sitio for r in resultados})
     tarjetas, archivos = await tarjetas_resultados(mostrados[:10])
     cabecera = (f"🔎 **«{texto[:200]}»** · {len(resultados)} resultado(s) en {len(sitios)} sitio(s) · "
-                f"{time.time() - t0:.1f}s · Hitomi no tiene buscador compatible")
+                f"{time.time() - t0:.1f}s")
     if len(mostrados) > 10:  # Discord admite 10 tarjetas por mensaje: el resto, como líneas
         cabecera += "\n" + "\n".join(_linea_resultado(i, r) for i, r in enumerate(mostrados[10:], 11))
     try:

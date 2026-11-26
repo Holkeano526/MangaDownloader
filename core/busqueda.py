@@ -13,7 +13,9 @@ Búsqueda por sitio (vista el 25/11/2026; todo por HTTP):
   tmohentai.app     /?title=<texto> con X-Requested-With (devuelve JSON {"html": ...})
   lectorhentai.com  /tipo/all?s=<texto>
   3hentai.net       /search?q=<texto>
-Hitomi no tiene un buscador por HTTP sencillo (índices binarios "nozomi"): no se busca allí.
+  hentai2read.com   /search?q=<texto>  (Inertia.js: JSON en <script data-page="app">)
+  m440.in           /search?q=<texto>  (JSON)
+  hitomi.la         índices binarios (árbol B de palabras del título + ficheros .nozomi de artista/grupo)
 """
 from __future__ import annotations
 
@@ -100,7 +102,8 @@ def _normalizar_completo(t: str) -> str:
 # suyo no contiene las palabras en el título, es que casó por artista/etiqueta y se conserva
 # (por detrás de los que sí casan por título). lectorhentai busca palabra a palabra y tmohentai
 # casa también palabras traducidas ("wife" -> "Mi Esposa Gyaru"): meten ruido y no se rescatan.
-ESTRICTOS = {"hentainexus", "nhentai.to", "nhentai.xxx", "nhentai.website", "3hentai"}
+# hentai2read casa por título alternativo ("natsuzuma" -> "Summer Wife ..."): sí se rescata.
+ESTRICTOS = {"hitomi", "hentainexus", "nhentai.to", "nhentai.xxx", "nhentai.website", "3hentai", "hentai2read", "m440"}
 PUNTUACION_POR_ETIQUETA = 0.6
 
 
@@ -167,6 +170,52 @@ async def _nhentai_website(s, q):
     return [("nhentai.website", t, u, img) for u, t, img in _enlaces(p, "https://nhentai.website/", r"/read/\d+")]
 
 
+async def _hitomi(s, q):
+    """Hitomi: índices binarios (ver core/sites/hitomi_http.py). Datos de las 20 más recientes."""
+    from .sites import hitomi_http
+    ids = (await hitomi_http.buscar_ids(q, s))[:20]
+    if not ids:
+        return []
+    reglas = await hitomi_http.reglas_gg(s)
+    sem = asyncio.Semaphore(8)
+
+    async def una(gid):
+        async with sem:
+            try:
+                return await hitomi_http.info_galeria(gid, s, reglas)
+            except Exception:
+                return None
+    infos = await asyncio.gather(*(una(g) for g in ids))
+    return [("hitomi", t, u, img) for t, u, img, _ in (i for i in infos if i)]
+
+
+async def _hentai2read(s, q):
+    """Inertia.js: los resultados van en JSON (props.books.data) dentro de la página."""
+    from .sites.h2r import datos_pagina
+    p = await _get(s, f"https://hentai2read.com/search?q={quote_plus(q)}")
+    libros = ((datos_pagina(p).get("props") or {}).get("books") or {}).get("data") or []
+    return [("hentai2read", b.get("title", ""), urljoin("https://hentai2read.com/", b.get("url", "")), b.get("cover", ""))
+            for b in libros if b.get("title") and b.get("url")]
+
+
+async def _m440(s, q):
+    """m440.in: /search?q= devuelve JSON [{value: título, label: html con enlace y portada}]."""
+    import json
+    texto = await _get(s, f"https://m440.in/search?q={quote_plus(q)}")
+    try:
+        datos = json.loads(texto) if texto else []
+    except ValueError:
+        return []
+    res = []
+    for d in datos if isinstance(datos, list) else []:
+        etiqueta = d.get("label", "")
+        u = re.search(r'href="([^"]+/manga/[^"]+)"', etiqueta)
+        img = re.search(r'src="([^"]+)"', etiqueta)
+        if d.get("value") and u:
+            res.append(("m440", html.unescape(d["value"]), u.group(1), img.group(1) if img else ""))
+    return res
+
+
 async def _3hentai(s, q):
     p = await _get(s, f"https://3hentai.net/search?q={quote_plus(q)}")
     return [("3hentai", t, u, img) for u, t, img in _enlaces(p, "https://3hentai.net/", r"/d/\d+")]
@@ -194,7 +243,8 @@ async def _lectorhentai(s, q):
     return res
 
 
-BUSCADORES = [_hentainexus, _nhentai_to, _nhentai_xxx, _nhentai_website, _3hentai, _tmohentai, _lectorhentai]
+BUSCADORES = [_hitomi, _hentainexus, _nhentai_to, _nhentai_xxx, _nhentai_website, _3hentai, _hentai2read, _m440,
+              _tmohentai, _lectorhentai]
 
 
 async def buscar(texto: str, minimo: float = 0.6, limite: int = 25) -> List[Resultado]:
@@ -251,6 +301,14 @@ def _autor_en_pagina(url: str, p: str) -> Optional[str]:
         m = re.search(r"Artist</td>\s*<td[^>]*>(.*?)</td>", p, re.S | re.I)
         if m:
             return re.sub(r"\s*\(\d+\)\s*$", "", _limpio(m.group(1))) or None
+    if "hentai2read" in host:
+        from .sites.h2r import datos_pagina
+        libro = (datos_pagina(p).get("props") or {}).get("book") or {}
+        for g in libro.get("groups") or []:
+            if g.get("type") == "artist":
+                nombres = [t.get("name") for t in g.get("tags") or [] if t.get("name")]
+                if nombres:
+                    return ", ".join(nombres[:3])
     if "lectorhentai" in host:
         m = re.search(r"<b>Artista</b>\s*<span[^>]*>(.*?)</span>", p, re.S | re.I)
         if m:
