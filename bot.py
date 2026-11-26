@@ -679,6 +679,8 @@ async def tarjetas_resultados(resultados, desde: int = 1):
     embeds, archivos = [], []
     for i, (r, portada) in enumerate(zip(resultados, portadas), start=desde):
         descripcion = f"{busqueda.BANDERA.get(r.idioma, '🏳️')} {ICONO_SITIO.get(r.sitio, '⚪')} `{r.sitio}`"
+        if busqueda.es_sin_censura(r.titulo):
+            descripcion += " · 🔓 sin censura"
         if r.extra.get("codigo"):  # resultado de una búsqueda por código: más datos para distinguirlos
             descripcion += f" · código **#{r.extra['codigo']}**"
             if r.extra.get("paginas"):
@@ -792,6 +794,17 @@ class SeriesView(discord.ui.View):
             boton = discord.ui.Button(label=f"✍️ Más obras de {a}"[:80], style=discord.ButtonStyle.secondary, row=1)
             boton.callback = lambda i, a=a: self._autor(i, a)
             self.add_item(boton)
+        boton = discord.ui.Button(label="🔓 Versión sin censura", style=discord.ButtonStyle.secondary, row=1)
+        boton.callback = self._sin_censura
+        self.add_item(boton)
+
+    async def _sin_censura(self, interaction: discord.Interaction):
+        if not self._permitido(interaction):
+            await interaction.response.send_message("Usa tu propio !buscar.", ephemeral=True)
+            return
+        await interaction.response.send_message(
+            f"🔓 Buscando la versión sin censura de **{busqueda.consulta_de_titulo(self.texto)[:150]}**...")
+        bot.loop.create_task(buscar_sin_censura(self.ctx, self.texto))
 
     async def _autor(self, interaction: discord.Interaction, autor: str):
         if not self._permitido(interaction):
@@ -904,6 +917,22 @@ async def buscar_obras_autor(ctx, autor: str, url_actual: str = ""):
     vista.mensaje = await ctx.send(content=contenido, embeds=tarjetas, files=archivos, view=vista)
 
 
+async def buscar_sin_censura(ctx, titulo: str, url: str = ""):
+    """Versiones sin censura (uncensored / decensored / sin censura) de una obra en todos los sitios."""
+    t0 = time.time()
+    consulta, resultados = await busqueda.version_sin_censura(titulo, url)
+    if not resultados:
+        await ctx.send(embed=discord.Embed(
+            title=f"🔓 {consulta[:200]}",
+            description="No encontré una versión sin censura de esta obra en los sitios compatibles.",
+            color=discord.Color.orange()))
+        return
+    vista = ResultadosPaginadosView(ctx, f"🔓 {consulta} · sin censura", busqueda.ordenar_por_idioma(resultados),
+                                    time.time() - t0)
+    contenido, tarjetas, archivos = await vista.pagina_actual()
+    vista.mensaje = await ctx.send(content=contenido, embeds=tarjetas, files=archivos, view=vista)
+
+
 async def autor_de(r) -> Optional[str]:
     """Autor de un resultado: el que trajo la búsqueda por código o el de su ficha/título."""
     if r.extra.get("artistas"):
@@ -920,6 +949,9 @@ class AccionesObraView(discord.ui.View):
         self.ctx, self.titulo, self.url, self.autor = ctx, titulo, url, autor
         b = discord.ui.Button(label="🔎 Buscar continuación", style=discord.ButtonStyle.primary)
         b.callback = self._continuacion
+        self.add_item(b)
+        b = discord.ui.Button(label="🔓 Versión sin censura", style=discord.ButtonStyle.secondary)
+        b.callback = self._sin_censura
         self.add_item(b)
         if autor:
             b = discord.ui.Button(label=f"✍️ Más obras de {autor}"[:80], style=discord.ButtonStyle.secondary)
@@ -939,6 +971,14 @@ class AccionesObraView(discord.ui.View):
             return
         await interaction.response.send_message(f"✍️ Buscando obras de **{self.autor[:100]}**...")
         bot.loop.create_task(buscar_obras_autor(self.ctx, self.autor, self.url))
+
+    async def _sin_censura(self, interaction: discord.Interaction):
+        if not _permitido(self.ctx, interaction):
+            await interaction.response.send_message("Usa tu propio !buscar.", ephemeral=True)
+            return
+        await interaction.response.send_message(
+            f"🔓 Buscando la versión sin censura de **{busqueda.consulta_de_titulo(self.titulo)[:150]}**...")
+        bot.loop.create_task(buscar_sin_censura(self.ctx, self.titulo, self.url))
 
 
 async def ofrecer_continuacion(ctx, titulo: str, url: str):
@@ -1030,6 +1070,7 @@ async def buscar_cmd(ctx, *, texto: Optional[str] = None):
     Busca un manga en todos los sitios compatibles.
     Uso: !buscar <título>   (sin el número para ver todas las partes: !buscar The Wife-Lenders)
          !buscar <código>   (código numérico de nhentai / Hitomi: !buscar 177013)
+         !buscar <título> uncensored   (solo versiones sin censura de esa obra)
     """
     codigo = busqueda.codigo_de(texto or "")
     if codigo:
@@ -1040,6 +1081,13 @@ async def buscar_cmd(ctx, *, texto: Optional[str] = None):
                        "p. ej. `!buscar The Wife-Lenders`. Con un código de nhentai/Hitomi: `!buscar 177013`.")
         return
     texto = texto.strip()
+    # "!buscar Metamorphosis uncensored" / "... sin censura": solo las versiones sin censura de esa obra
+    if busqueda.PIDE_SIN_CENSURA.search(texto):
+        titulo = busqueda.PIDE_SIN_CENSURA.sub(" ", texto).strip()
+        if len(busqueda.normalizar(titulo)) >= 3:
+            await ctx.send(f"🔓 Buscando la versión sin censura de **{titulo[:150]}**...")
+            await buscar_sin_censura(ctx, titulo)
+            return
     espera = await ctx.send(embed=discord.Embed(title=f"🔎 Buscando «{texto[:200]}»...",
                                                 description="Hitomi · hentainexus · nhentai (to, xxx, website) · 3hentai · "
                                                             "hentai2read · m440 · hentalk · tmohentai · lectorhentai · "
@@ -1113,7 +1161,8 @@ class ResultadosPaginadosView(discord.ui.View):
         menu.callback = self._elegido
         self.add_item(menu)
         for fila, (texto, callback) in enumerate((("🔎 Buscar continuación de…", self._continuacion),
-                                                 ("✍️ Más obras del autor de…", self._autor)), start=2):
+                                                 ("✍️ Más obras del autor de…", self._autor),
+                                                 ("🔓 Buscar versión sin censura de…", self._sin_censura)), start=2):
             extra = discord.ui.Select(
                 placeholder=texto,
                 options=[discord.SelectOption(label=f"{i}. {r.titulo}"[:100], value=str(i - 1),
@@ -1191,6 +1240,15 @@ class ResultadosPaginadosView(discord.ui.View):
                 return
             await buscar_obras_autor(self.ctx, autor, r.url)
         bot.loop.create_task(seguir())
+
+    async def _sin_censura(self, interaction: discord.Interaction):
+        if not self._permitido(interaction):
+            await interaction.response.send_message("Usa tu propio !buscar.", ephemeral=True)
+            return
+        r = self.resultados[int(interaction.data["values"][0])]
+        await interaction.response.send_message(
+            f"🔓 Buscando la versión sin censura de **{busqueda.consulta_de_titulo(r.titulo)[:150]}**...")
+        bot.loop.create_task(buscar_sin_censura(self.ctx, r.titulo, r.url))
 
 
 @bot.command(name='traducir')
