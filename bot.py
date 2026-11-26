@@ -611,7 +611,10 @@ ICONO_SITIO = {"hentainexus": "🟣", "nhentai.to": "🔴", "nhentai.xxx": "🔴
 
 
 def _linea_resultado(i: int, r: "busqueda.Resultado") -> str:
-    return f"**{i}.** [{r.titulo[:90]}]({r.url}) {ICONO_SITIO.get(r.sitio, '⚪')} `{r.sitio}`"
+    # Los corchetes del título ("[Círculo (Artista)] ...") rompen el enlace markdown de Discord
+    t = r.titulo[:90].replace("[", "(").replace("]", ")")
+    return (f"**{i}.** {busqueda.BANDERA.get(r.idioma, '🏳️')} [{t}]({r.url}) "
+            f"{ICONO_SITIO.get(r.sitio, '⚪')} `{r.sitio}`")
 
 
 COLOR_SITIO = {"hentainexus": 0x9b59b6, "nhentai.to": 0xe74c3c, "nhentai.xxx": 0xe74c3c, "nhentai.website": 0xe74c3c,
@@ -659,7 +662,7 @@ async def tarjetas_resultados(resultados, desde: int = 1):
     embeds, archivos = [], []
     for i, (r, portada) in enumerate(zip(resultados, portadas), start=desde):
         e = discord.Embed(title=f"{i}. {r.titulo}"[:256], url=r.url, color=COLOR_SITIO.get(r.sitio, 0x95a5a6),
-                          description=f"{ICONO_SITIO.get(r.sitio, '⚪')} `{r.sitio}`")
+                          description=f"{busqueda.BANDERA.get(r.idioma, '🏳️')} {ICONO_SITIO.get(r.sitio, '⚪')} `{r.sitio}`")
         if portada:
             nombre = f"portada_{i}.{portada[1]}"
             archivos.append(discord.File(io.BytesIO(portada[0]), filename=nombre))
@@ -749,24 +752,94 @@ async def buscar_cmd(ctx, *, texto: Optional[str] = None):
                                                             "hentai2read · m440 · tmohentai · lectorhentai",
                                                 color=discord.Color.blue()))
     t0 = time.time()
-    resultados = await busqueda.buscar(texto)
+    resultados = busqueda.ordenar_por_idioma(await busqueda.buscar(texto, limite=50))
     embed = discord.Embed(title=f"🔎 «{texto[:200]}»", color=discord.Color.blue())
     if not resultados:
         embed.description = "Sin resultados en los sitios compatibles. Prueba con menos palabras o el título en romaji."
         await espera.edit(embed=embed)
         return
-    mostrados = resultados[:15]
-    sitios = sorted({r.sitio for r in resultados})
-    tarjetas, archivos = await tarjetas_resultados(mostrados[:10])
-    cabecera = (f"🔎 **«{texto[:200]}»** · {len(resultados)} resultado(s) en {len(sitios)} sitio(s) · "
-                f"{time.time() - t0:.1f}s")
-    if len(mostrados) > 10:  # Discord admite 10 tarjetas por mensaje: el resto, como líneas
-        cabecera += "\n" + "\n".join(_linea_resultado(i, r) for i, r in enumerate(mostrados[10:], 11))
+    vista = ResultadosPaginadosView(ctx, texto, resultados, time.time() - t0)
+    contenido, tarjetas, archivos = await vista.pagina_actual()
     try:
         await espera.delete()
     except discord.errors.HTTPException:
         pass
-    await ctx.send(content=cabecera[:2000], embeds=tarjetas, files=archivos, view=ElegirDescargaView(ctx, mostrados))
+    vista.mensaje = await ctx.send(content=contenido, embeds=tarjetas, files=archivos, view=vista)
+
+
+class ResultadosPaginadosView(discord.ui.View):
+    """Resultados de !buscar en páginas de 10 tarjetas (el máximo de Discord por mensaje), con
+    ◀ ▶ para pasar de página y un menú para descargar cualquiera de la página actual."""
+
+    POR_PAGINA = 10
+
+    def __init__(self, ctx, texto: str, resultados, segundos: float):
+        super().__init__(timeout=1800)
+        self.ctx, self.texto, self.resultados, self.segundos = ctx, texto, resultados, segundos
+        self.pagina = 0
+        self.paginas = max(1, -(-len(resultados) // self.POR_PAGINA))
+        self.mensaje = None
+        self._montar()
+
+    def _de_la_pagina(self):
+        i = self.pagina * self.POR_PAGINA
+        return self.resultados[i:i + self.POR_PAGINA]
+
+    def _montar(self):
+        self.clear_items()
+        inicio = self.pagina * self.POR_PAGINA
+        menu = discord.ui.Select(
+            placeholder=f"Elige uno para descargarlo (página {self.pagina + 1}/{self.paginas})",
+            options=[discord.SelectOption(label=f"{i}. {r.titulo}"[:100], value=str(i - 1),
+                                          description=r.sitio[:100], emoji=busqueda.BANDERA.get(r.idioma, "🏳️"))
+                     for i, r in enumerate(self._de_la_pagina(), start=inicio + 1)],
+            row=0,
+        )
+        menu.callback = self._elegido
+        self.add_item(menu)
+        if self.paginas > 1:
+            anterior = discord.ui.Button(label="◀ Anterior", style=discord.ButtonStyle.secondary,
+                                         disabled=self.pagina == 0, row=1)
+            siguiente = discord.ui.Button(label="Siguiente ▶", style=discord.ButtonStyle.secondary,
+                                          disabled=self.pagina >= self.paginas - 1, row=1)
+            anterior.callback = lambda i: self._ir(i, -1)
+            siguiente.callback = lambda i: self._ir(i, +1)
+            self.add_item(anterior)
+            self.add_item(siguiente)
+
+    async def pagina_actual(self):
+        cuenta = {}
+        for r in self.resultados:
+            cuenta[r.idioma] = cuenta.get(r.idioma, 0) + 1
+        idiomas = " · ".join(f"{busqueda.BANDERA.get(k, '🏳️')} {v}"
+                             for k, v in sorted(cuenta.items(), key=lambda kv: busqueda._PRIORIDAD.get(kv[0], 4)))
+        sitios = len({r.sitio for r in self.resultados})
+        contenido = (f"🔎 **«{self.texto[:200]}»** · {len(self.resultados)} resultado(s) en {sitios} sitio(s) · "
+                     f"{self.segundos:.1f}s · página **{self.pagina + 1}/{self.paginas}**\n{idiomas}")
+        tarjetas, archivos = await tarjetas_resultados(self._de_la_pagina(), desde=self.pagina * self.POR_PAGINA + 1)
+        return contenido[:2000], tarjetas, archivos
+
+    def _permitido(self, interaction: discord.Interaction) -> bool:
+        permisos = getattr(interaction.user, "guild_permissions", None)
+        return interaction.user.id == self.ctx.author.id or bool(permisos and permisos.manage_messages)
+
+    async def _ir(self, interaction: discord.Interaction, paso: int):
+        if not self._permitido(interaction):
+            await interaction.response.send_message("Usa tu propio !buscar para pasar de página.", ephemeral=True)
+            return
+        self.pagina = min(max(0, self.pagina + paso), self.paginas - 1)
+        await interaction.response.defer()  # las portadas tardan un poco en descargarse
+        self._montar()
+        contenido, tarjetas, archivos = await self.pagina_actual()
+        await interaction.message.edit(content=contenido, embeds=tarjetas, attachments=archivos, view=self)
+
+    async def _elegido(self, interaction: discord.Interaction):
+        if not self._permitido(interaction):
+            await interaction.response.send_message("Usa tu propio !buscar para descargar.", ephemeral=True)
+            return
+        r = self.resultados[int(interaction.data["values"][0])]
+        await interaction.response.send_message(f"📥 Descargando **{r.titulo[:150]}** de `{r.sitio}`...")
+        bot.loop.create_task(self.ctx.invoke(descargar, url=r.url))
 
 
 @bot.command(name='traducir')
