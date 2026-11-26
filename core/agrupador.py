@@ -135,7 +135,10 @@ async def agrupar(texto: str, resultados: List["busqueda.Resultado"],
 
     series, usados = [], set()
     for s in datos["series"][:6]:
-        serie = Serie(str(s.get("nombre") or "?")[:120], str(s.get("artista") or "")[:80])
+        artista = str(s.get("artista") or "").strip()
+        if artista.lower() in {"desconocido", "unknown", "?", "n/a", "none", "-"}:
+            artista = ""  # mejor no mostrar nada que "✍️ Desconocido"
+        serie = Serie(str(s.get("nombre") or "?")[:120], artista[:80])
         for p in s.get("partes") or []:
             items = []
             for i in p.get("items") or []:
@@ -148,6 +151,58 @@ async def agrupar(texto: str, resultados: List["busqueda.Resultado"],
         if serie.partes:
             series.append(serie)
     return series or None
+
+
+_RANGO = re.compile(r"(\d+)\s*(?:-|~|–|&|\+|to|al|y)\s*(\d+)", re.I)
+_NUMERO = re.compile(r"\d+(?:\.\d+)?")
+_CORCHETES = re.compile(r"\[[^\]]*\]|\([^)]*\)|\{[^}]*\}")
+
+
+def numeros_de_parte(texto: str) -> set:
+    """Números que cubre el nombre de una parte: "3" -> {3}, "1-3" -> {1, 2, 3}, "Extra" -> {}."""
+    texto = texto or ""
+    numeros = set()
+    for a, b in _RANGO.findall(texto):
+        a, b = int(a), int(b)
+        if a < b <= a + 100:
+            numeros.update(range(a, b + 1))
+    texto = _RANGO.sub(" ", texto)
+    numeros.update(float(n) for n in _NUMERO.findall(texto) if float(n) < 1000)  # no años ni IDs
+    return numeros
+
+
+def numeros_del_titulo(titulo: str) -> set:
+    """Respaldo cuando lo descargado no quedó en ninguna parte: el rango o número del final del
+    título sin [círculo], (idioma)... ("Obra 1-3 [English]" -> {1, 2, 3})."""
+    limpio = _CORCHETES.sub(" ", titulo or "").strip()
+    m = re.search(r"(\d+)\s*(?:-|~|–)\s*(\d+)\s*$", limpio)
+    if m:
+        return numeros_de_parte(m.group(0))
+    _, numero = busqueda.titulo_base(limpio)
+    return {numero} if numero is not None else set()
+
+
+def solo_posteriores(series: List[Serie], actual_url: str, actual_titulo: str = "") -> tuple:
+    """Quita de la serie de lo descargado las partes que ya cubre (si bajaste "1-3", no ofrece
+    1, 2 ni 3). Se quedan la parte descargada (marcada) y las que no tienen número (extras).
+    Devuelve (series, hasta): hasta = última parte que ya tienes, o None si no se pudo saber."""
+    serie, actual = None, None
+    for s in series:
+        actual = next((p for p in s.partes if any(r.url == actual_url for r in p.resultados)), None)
+        if actual:
+            serie = s
+            break
+    if serie is None and series:
+        serie = series[0]  # DeepSeek pone primero la serie de lo descargado
+    if serie is None:
+        return series, None
+    cubiertos = (numeros_de_parte(actual.nombre) if actual else set()) or numeros_del_titulo(actual_titulo)
+    if not cubiertos:
+        return series, None
+    hasta = max(cubiertos)
+    serie.partes = [p for p in serie.partes
+                    if p is actual or not numeros_de_parte(p.nombre) or min(numeros_de_parte(p.nombre)) > hasta]
+    return series, hasta
 
 
 async def series_para(texto: str, actual: Optional[str] = None, artista: Optional[str] = None):
