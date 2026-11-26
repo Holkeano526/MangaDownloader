@@ -8,3 +8,5 @@ from .zonatmo import ZonaTMOHandler
 from .fakku import FakkuHandler
 from .hentalk import HentalkHandler
 from .shademanga import ShadeMangaHandler
+from .tmohentai_app import TMOHentaiAppHandler
+from .lectorhentai import LectorHentaiHandler

@@ -15,11 +15,16 @@ from .sites import (
     ZonaTMOHandler,
     FakkuHandler,
     HentalkHandler,
-    ShadeMangaHandler
+    ShadeMangaHandler,
+    TMOHentaiAppHandler,
+    LectorHentaiHandler,
 )
 
 # Instantiate handlers (Stateless approach)
 HANDLERS = [
+    # tmohentai.app antes que TMOHandler: este último coincide con cualquier "tmohentai"
+    TMOHentaiAppHandler(),
+    LectorHentaiHandler(),
     TMOHandler(),
     M440Handler(),
     H2RHandler(),
