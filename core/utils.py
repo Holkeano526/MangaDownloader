@@ -21,64 +21,10 @@ except ImportError:
 from .config import PDF_FOLDER_NAME, TEMP_FOLDER_NAME, CONCURRENCIA_IMAGENES, REINTENTOS_IMAGEN, JPEG_CALIDAD
 from concurrent.futures import ThreadPoolExecutor
 
-# --- Reusable HTTP Session (Keep-Alive, Connection Pooling) ---
-# A dictionary to hold named sessions for different components (web, bot, etc.)
-_http_sessions: dict = {}
-_session_lock: asyncio.Lock = None
-
-
-def _get_session_lock() -> asyncio.Lock:
-    """Lazily create the asyncio Lock for session management."""
-    global _session_lock
-    if _session_lock is None:
-        _session_lock = asyncio.Lock()
-    return _session_lock
-
-
-async def get_http_session(name: str = "default", headers: Optional[dict] = None) -> aiohttp.ClientSession:
-    """
-    Returns a reusable aiohttp.ClientSession for the given name.
-    Creates one if it doesn't exist. Sessions use keep-alive and connection pooling.
-    
-    Args:
-        name: A namespace for the session (e.g. 'default', 'bot', 'web').
-        headers: Default headers for this session.
-    
-    Returns:
-        An aiohttp.ClientSession instance.
-    """
-    lock = _get_session_lock()
-    async with lock:
-        if name not in _http_sessions or _http_sessions[name].closed:
-            connector = aiohttp.TCPConnector(
-                limit=50,           # Max total connections
-                limit_per_host=20,  # Max connections per host
-                ttl_dns_cache=300,  # DNS cache TTL (5 min)
-                force_close=False,  # Use keep-alive
-            )
-            timeout = aiohttp.ClientTimeout(total=60, connect=15, sock_read=30)
-            session_headers = headers or {}
-            _http_sessions[name] = aiohttp.ClientSession(
-                connector=connector,
-                timeout=timeout,
-                headers=session_headers,
-            )
-        return _http_sessions[name]
-
-
-async def close_http_sessions():
-    """Gracefully close all reusable HTTP sessions."""
-    lock = _get_session_lock()
-    async with lock:
-        for name, session in list(_http_sessions.items()):
-            if not session.closed:
-                await session.close()
-        _http_sessions.clear()
-
 def clean_filename(text: str) -> str:
     """
     Sanitizes the string to create a valid Windows/Linux file or directory name.
-    Strips HTML tags and removes reserved characters `\ / * ? : " < > |`.
+    Strips HTML tags and removes reserved characters (backslash, / * ? : " < > |).
     
     Args:
         text (str): The raw title string to be sanitized.

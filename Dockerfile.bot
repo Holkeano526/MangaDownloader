@@ -9,6 +9,11 @@
 # Si se pierde la etiqueta base: docker tag <id de la imagen buena> manga-downloader-discord_bot:base-20260816
 FROM manga-downloader-discord_bot:base-20260816
 
+# La base trae el código de agosto en /app (las dependencias están en site-packages; .env y PDF/
+# son volúmenes). COPY solo añade, así que se vacía /app primero: si no, los archivos borrados
+# del repo (src/, handlers viejos...) seguirían dentro de la imagen.
+RUN find /app -mindepth 1 -delete
+
 COPY . .
 
 CMD ["python", "bot.py"]

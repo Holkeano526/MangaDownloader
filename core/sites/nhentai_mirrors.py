@@ -21,8 +21,9 @@ Visto el 25/11/2026:
   nhentai.website  /read/<id>   t1.nhentai.jp.net/g/<media>/<n>x.webp    -> (lector)
   3hentai.net      /d/<id>      s1.3hentai.net/d<media>/<n>t.jpg         -> <n>.jpg  (mismo frontend)
 
-Los mirrors con desafío de Cloudflare (p. ej. nhentai.top) no se intentan saltar: se
-avisa con un mensaje claro. nhentai.net sigue en su handler propio (nhentai.py).
+Los mirrors con desafío de Cloudflare (nhentai.net, nhentai.top) no se intentan saltar: se
+avisa con un mensaje claro. (El antiguo nhentai.py intentaba pasar Cloudflare ocultando la
+automatización del navegador; se eliminó en la limpieza del 26/11/2026.)
 """
 import asyncio
 import html
@@ -48,8 +49,8 @@ def _es_cloudflare(status: int, cuerpo: str) -> bool:
 
 
 class NHentaiMirrorHandler(BaseSiteHandler):
-    """Cualquier dominio "nhentai.*" (salvo nhentai.net, que tiene su propio handler) y clones
-    con el mismo frontend aunque se llamen distinto, como 3hentai.net."""
+    """Cualquier dominio "nhentai.*" y clones con el mismo frontend aunque se llamen distinto,
+    como 3hentai.net."""
 
     @staticmethod
     def get_supported_domains() -> list:
