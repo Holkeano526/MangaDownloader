@@ -557,6 +557,13 @@ async def descargar(ctx, url: str):
         await ctx.send("Please provide a URL.")
         return
 
+    # Un número a secas es un código de galería: el mismo número es una obra distinta en nhentai
+    # y en Hitomi, así que no se descarga directamente; se enseñan las dos para elegir.
+    codigo = busqueda.codigo_de(url)
+    if codigo:
+        await buscar_por_codigo(ctx, codigo)
+        return
+
     # chochox/vercomicsporno bloquean la descarga automática (Cloudflare): no se les pide nada;
     # se busca la misma obra, por el título del enlace, en los sitios compatibles.
     obra = obra_desde_enlace(url)
@@ -671,8 +678,15 @@ async def tarjetas_resultados(resultados, desde: int = 1):
         portadas = await asyncio.gather(*(_bajar_portada(s, r) for r in resultados))
     embeds, archivos = [], []
     for i, (r, portada) in enumerate(zip(resultados, portadas), start=desde):
+        descripcion = f"{busqueda.BANDERA.get(r.idioma, '🏳️')} {ICONO_SITIO.get(r.sitio, '⚪')} `{r.sitio}`"
+        if r.extra.get("codigo"):  # resultado de una búsqueda por código: más datos para distinguirlos
+            descripcion += f" · código **#{r.extra['codigo']}**"
+            if r.extra.get("paginas"):
+                descripcion += f" · {r.extra['paginas']} págs."
+            if r.extra.get("artistas"):
+                descripcion += f"\n✍️ {', '.join(r.extra['artistas'])[:200]}"
         e = discord.Embed(title=f"{i}. {r.titulo}"[:256], url=r.url, color=COLOR_SITIO.get(r.sitio, 0x95a5a6),
-                          description=f"{busqueda.BANDERA.get(r.idioma, '🏳️')} {ICONO_SITIO.get(r.sitio, '⚪')} `{r.sitio}`")
+                          description=descripcion)
         if portada:
             nombre = f"portada_{i}.{portada[1]}"
             archivos.append(discord.File(io.BytesIO(portada[0]), filename=nombre))
@@ -899,15 +913,49 @@ async def alternativas_sitio_bloqueado(ctx, url: str, texto: str, artista: Optio
     vista.mensaje = await ctx.send(content=contenido, embeds=tarjetas, files=archivos, view=vista)
 
 
+async def buscar_por_codigo(ctx, codigo: int):
+    """!buscar 177013 / !descargar 177013: la galería con ese código en nhentai (vía nhentai.to)
+    y en Hitomi, una tarjeta por sitio para elegir cuál descargar."""
+    espera = await ctx.send(embed=discord.Embed(title=f"🔢 Buscando el código #{codigo}...",
+                                                description="nhentai (vía nhentai.to) · Hitomi",
+                                                color=discord.Color.blue()))
+    t0 = time.time()
+    resultados = await busqueda.buscar_codigo(codigo)
+    if not resultados:
+        await espera.edit(embed=discord.Embed(
+            title=f"🔢 #{codigo}: no existe",
+            description=(f"No hay ninguna galería con el código **#{codigo}** ni en nhentai (nhentai.to) ni en "
+                         f"Hitomi. Si es parte de un título y no un código, añade alguna palabra más "
+                         f"(p. ej. `!buscar {codigo} <palabra del título>`)."),
+            color=discord.Color.orange()))
+        return
+    if len(resultados) > 1:
+        nota = "⚠️ El mismo número es una galería **distinta** en cada sitio: elige por título y portada."
+    else:
+        nota = "Solo existe en " + ("Hitomi." if resultados[0].sitio == "hitomi" else "nhentai.")
+    vista = ResultadosPaginadosView(ctx, f"#{codigo}", resultados, time.time() - t0, nota=nota)
+    contenido, tarjetas, archivos = await vista.pagina_actual()
+    try:
+        await espera.delete()
+    except discord.errors.HTTPException:
+        pass
+    vista.mensaje = await ctx.send(content=contenido, embeds=tarjetas, files=archivos, view=vista)
+
+
 @bot.command(name='buscar')
 async def buscar_cmd(ctx, *, texto: Optional[str] = None):
     """
     Busca un manga en todos los sitios compatibles.
     Uso: !buscar <título>   (sin el número para ver todas las partes: !buscar The Wife-Lenders)
+         !buscar <código>   (código numérico de nhentai / Hitomi: !buscar 177013)
     """
+    codigo = busqueda.codigo_de(texto or "")
+    if codigo:
+        await buscar_por_codigo(ctx, codigo)
+        return
     if not texto or len(texto.strip()) < 3:
         await ctx.send("Uso: `!buscar <título>` (mínimo 3 letras). Sin número para ver todas las partes, "
-                       "p. ej. `!buscar The Wife-Lenders`.")
+                       "p. ej. `!buscar The Wife-Lenders`. Con un código de nhentai/Hitomi: `!buscar 177013`.")
         return
     texto = texto.strip()
     espera = await ctx.send(embed=discord.Embed(title=f"🔎 Buscando «{texto[:200]}»...",
@@ -964,9 +1012,10 @@ class ResultadosPaginadosView(discord.ui.View):
 
     POR_PAGINA = 10
 
-    def __init__(self, ctx, texto: str, resultados, segundos: float):
+    def __init__(self, ctx, texto: str, resultados, segundos: float, nota: str = ""):
         super().__init__(timeout=1800)
         self.ctx, self.texto, self.resultados, self.segundos = ctx, texto, resultados, segundos
+        self.nota = nota  # línea extra bajo la cabecera (p. ej. el aviso de la búsqueda por código)
         self.pagina = 0
         self.paginas = max(1, -(-len(resultados) // self.POR_PAGINA))
         self.mensaje = None
@@ -1007,6 +1056,8 @@ class ResultadosPaginadosView(discord.ui.View):
         sitios = len({r.sitio for r in self.resultados})
         contenido = (f"🔎 **«{self.texto[:200]}»** · {len(self.resultados)} resultado(s) en {sitios} sitio(s) · "
                      f"{self.segundos:.1f}s · página **{self.pagina + 1}/{self.paginas}**\n{idiomas}")
+        if self.nota:
+            contenido += f"\n{self.nota}"
         tarjetas, archivos = await tarjetas_resultados(self._de_la_pagina(), desde=self.pagina * self.POR_PAGINA + 1)
         return contenido[:2000], tarjetas, archivos
 

@@ -199,7 +199,7 @@ async def _hitomi(s, q):
             except Exception:
                 return None
     infos = await asyncio.gather(*(una(g) for g in ids))
-    return [("hitomi", t, u, img, idioma) for t, u, img, _, idioma in (i for i in infos if i)]
+    return [("hitomi", t, u, img, idioma) for t, u, img, _, idioma, _ in (i for i in infos if i)]
 
 
 async def _hentai2read(s, q):
@@ -344,6 +344,72 @@ async def buscar(texto: str, minimo: float = 0.6, limite: int = 25) -> List[Resu
                                             idioma_de(titulo, sitio, pista[0] if pista else "")))
     resultados.sort(key=lambda r: (-r.puntuacion, r.numero if r.numero is not None else 1e9, r.sitio))
     return resultados[:limite]
+
+
+# ─── Búsqueda por código ("nuclear code") ────────────────────────────────────
+# Un número a secas ("177013", "#177013") es el código de una galería. El MISMO número es una
+# galería DISTINTA en cada sitio, así que se devuelve una tarjeta por sitio, sin mezclarlas.
+#  - nhentai: nhentai.net es una app JS tras Cloudflare (no se usa). De sus mirrors, solo
+#    nhentai.to conserva la numeración de nhentai (visto el 26/11/2026: 177013 = METAMORPHOSIS,
+#    hasta ~700000). nhentai.xxx, nhentai.website y 3hentai numeran a su manera: no sirven.
+#  - hitomi.la: ltn.<dominio>/galleries/<id>.js (el mismo JSON que usa el handler).
+_CODIGO = re.compile(r"^\s*(?:#|n[º°o]\.?\s*)?\s*(\d{1,7})\s*$", re.I)
+_IDIOMAS_NO = {"translated", "rewrite", "speechless", "text cleaned"}
+
+
+def codigo_de(texto: str) -> Optional[int]:
+    """'177013' / '#177013' -> 177013. None si el texto no es solo un número."""
+    m = _CODIGO.match(texto or "")
+    return int(m.group(1)) if m and int(m.group(1)) > 0 else None
+
+
+async def _codigo_nhentai(s: aiohttp.ClientSession, gid: int) -> Optional[Resultado]:
+    url = f"https://nhentai.to/g/{gid}"
+    async with s.get(url, headers={"Referer": "https://nhentai.to/"}) as r:
+        if r.status != 200:
+            return None  # 404: no existe (o el mirror está caído)
+        p = await r.text(errors="replace")
+    m = re.search(r"<h1[^>]*>(.*?)</h1>", p, re.S | re.I)
+    titulo = _limpio(m.group(1)) if m else ""
+    if not titulo:
+        return None
+    portada = ""
+    m = re.search(r'<div id="cover">.*?<img[^>]*?\bsrc="([^"]+)"', p, re.S)
+    if m:
+        portada = urljoin(url, html.unescape(m.group(1)))
+    idiomas = [x for x in re.findall(r'href="/language/([^/"]+)/"', p) if x.replace("-", " ") not in _IDIOMAS_NO]
+    artistas = list(dict.fromkeys(_limpio(re.sub(r"<span class=\"count\">.*?</span>", "", a))
+                                  for a in re.findall(r'href="/artist/[^"]+"[^>]*>(.*?)</a>', p, re.S)))
+    artistas = [re.sub(r"\s*\d+(?:\.\d+)?[kKmM]?\s*$", "", a) for a in artistas if a]
+    m = re.search(r'"num_pages":\s*(\d+)', p) or re.search(r"Pages:\s*(?:<[^>]+>\s*)*(\d+)", p)
+    paginas = int(m.group(1)) if m else None
+    return Resultado("nhentai.to", titulo, url, 1.0, None, portada,
+                     idioma_de(titulo, "nhentai.to", idiomas[0] if idiomas else ""),
+                     {"codigo": gid, "artistas": artistas[:3], "paginas": paginas})
+
+
+async def _codigo_hitomi(s: aiohttp.ClientSession, gid: int) -> Optional[Resultado]:
+    from .sites import hitomi_http
+    reglas = await hitomi_http.reglas_gg(s)
+    info = await hitomi_http.info_galeria(gid, s, reglas)
+    if not info:
+        return None
+    titulo, url, portada, artistas, idioma, paginas = info
+    return Resultado("hitomi", titulo, url, 1.0, None, portada, idioma_de(titulo, "hitomi", idioma),
+                     {"codigo": gid, "artistas": artistas[:3], "paginas": paginas})
+
+
+async def buscar_codigo(gid: int) -> List[Resultado]:
+    """La galería con ese código en nhentai (vía nhentai.to) y en Hitomi, una por sitio.
+    Un sitio donde no existe (o que no responde) simplemente no aparece."""
+    async with aiohttp.ClientSession(headers={"User-Agent": config.USER_AGENT}, timeout=TIMEOUT) as s:
+        async def seguro(f):
+            try:
+                return await f(s, gid)
+            except Exception:
+                return None
+        res = await asyncio.gather(seguro(_codigo_nhentai), seguro(_codigo_hitomi))
+    return [r for r in res if r]
 
 
 # ─── Idioma ──────────────────────────────────────────────────────────────────

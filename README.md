@@ -56,21 +56,39 @@ MangaDownloader y MangaScan AI son **dos repos hermanos**: se desarrollan y desp
 
 | Comando | Qué hace |
 |---|---|
-| `!descargar <url>` | Descarga a PDF. Acepta una ficha, un lector o una serie (pone sus capítulos en cola). |
+| `!descargar <url>` | Descarga a PDF. Acepta una ficha, un lector o una serie (pone sus capítulos en cola). Con un código numérico (`!descargar 177013`) **no descarga directo**: muestra las mismas opciones que `!buscar 177013` para que elijas el sitio. |
 | `!buscar <título>` | Busca en los 14 sitios, suma las obras del artista y agrupa con DeepSeek en series › partes › fuentes (🇪🇸 primero, luego 🇬🇧). Si la IA falla, muestra una lista paginada de tarjetas con portada. Funciona sin número de parte: `!buscar The Wife-Lenders`. |
+| `!buscar <código>` | Código numérico de nhentai / Hitomi ("nuclear code"): `!buscar 177013` o `!buscar #177013`. Ver [Búsqueda por código](#búsqueda-por-código). |
 | `!traducir <enlace GoFile \| nombre.pdf>` | Traduce con MangaScan un PDF que el bot ya descargó (por su enlace de GoFile o su nombre). También acepta un PDF adjunto al mensaje. |
 | `!help` | Ayuda. |
 
 **Botones:** ⏹️ Cancelar (descarga y traducción; no deja PDFs a medias), 🌐 Traducir (en cada PDF entregado),
 menú *Descargar una parte* y 📋 *Ver todos los resultados* en las búsquedas.
 
+### Búsqueda por código
+
+Si el texto es solo un número (`177013`, `#177013`), el bot lo toma como el código de una galería y lo busca
+a la vez en:
+
+- **nhentai**, a través de **nhentai.to**: nhentai.net es una app JavaScript tras Cloudflare (no se usa) y,
+  de sus mirrors, nhentai.to es el único que conserva la numeración original (177013 = *METAMORPHOSIS*).
+  nhentai.xxx, nhentai.website y 3hentai numeran a su manera, así que no sirven para códigos.
+- **Hitomi**, con el mismo `galleries/<id>.js` que usa la descarga.
+
+**El mismo número es una obra distinta en cada sitio** (177013 en Hitomi es *Cranky Girl*), así que no se
+mezclan: sale una tarjeta por sitio con título, portada, idioma, sitio, nº de páginas y artista, y el menú
+para descargar la que quieras. Si el código solo existe en un sitio, sale solo esa; si no existe en ninguno,
+el bot lo dice. Por esa ambigüedad, `!descargar <código>` enseña las opciones en vez de descargar directo.
+
+Para buscar una obra cuyo título es un número, añade alguna palabra (`!buscar 1000 nights`).
+
 ## Sitios compatibles
 
 | Sitio | Descarga | Búsqueda | Cómo |
 |---|:-:|:-:|---|
-| hitomi.la | ✅ | ✅ | HTTP: `galleries.js` + `gg.js`; búsqueda en su índice binario (B-tree + `.nozomi`) |
+| hitomi.la | ✅ | ✅ | HTTP: `galleries.js` + `gg.js`; búsqueda en su índice binario (B-tree + `.nozomi`) y por código |
 | hentainexus.com | ✅ | ✅ | HTTP: descifra la lista de páginas de `initReader` (respaldo con navegador) |
-| nhentai.to · .xxx · .website | ✅ | ✅ | HTTP, handler genérico para los clones de nhentai |
+| nhentai.to · .xxx · .website | ✅ | ✅ | HTTP, handler genérico para los clones de nhentai. Los códigos de nhentai se buscan en nhentai.to (única con la numeración original) |
 | 3hentai.net | ✅ | ✅ | HTTP (mismo handler genérico; verifica el nº real de páginas) |
 | tmohentai.app | ✅ | ✅ | HTTP |
 | lectorhentai.com | ✅ | ✅ | HTTP |
