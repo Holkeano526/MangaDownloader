@@ -18,7 +18,6 @@ import aiohttp
 
 from .base import BaseSiteHandler
 from .. import config
-from ..http import crear_sesion
 from ..utils import clean_filename, download_and_make_pdf
 
 WEB = "https://allporncomic.com"
@@ -50,7 +49,7 @@ class AllPornComicHandler(BaseSiteHandler):
                       progress_callback: Optional[Callable[[int, int], None]] = None):
         partes = _segmentos(url)
         timeout = aiohttp.ClientTimeout(total=30, connect=10)
-        async with crear_sesion(headers=CABECERAS, timeout=timeout) as s:
+        async with aiohttp.ClientSession(headers=CABECERAS, timeout=timeout) as s:
             if len(partes) >= 3 and partes[0] == "porncomic":
                 return await self._capitulo(s, url, log_callback, check_cancel, progress_callback)
             if len(partes) == 2 and partes[0] == "porncomic":

@@ -9,4 +9,3 @@ fastapi
 uvicorn
 python-multipart
 websockets
-cloudscraper>=1.2.71

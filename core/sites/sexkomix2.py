@@ -19,7 +19,6 @@ import aiohttp
 
 from .base import BaseSiteHandler
 from .. import config
-from ..http import crear_sesion
 from ..utils import clean_filename, download_and_make_pdf
 
 WEB = "https://sexkomix2.com"
@@ -66,7 +65,7 @@ class SexKomix2Handler(BaseSiteHandler):
     async def process(self, url: str, log_callback: Callable[[str], None], check_cancel: Callable[[], bool],
                       progress_callback: Optional[Callable[[int, int], None]] = None):
         timeout = aiohttp.ClientTimeout(total=30, connect=10)
-        async with crear_sesion(headers=CABECERAS, timeout=timeout) as s:
+        async with aiohttp.ClientSession(headers=CABECERAS, timeout=timeout) as s:
             async with s.get(url) as r:
                 pagina = await r.text(errors="replace") if r.status == 200 else ""
                 estado = r.status

@@ -14,10 +14,6 @@ FROM manga-downloader-discord_bot:base-20260816
 # del repo (src/, handlers viejos...) seguirían dentro de la imagen.
 RUN find /app -mindepth 1 -delete
 
-# Dependencias nuevas que no están en la base congelada. cloudscraper resuelve los desafíos
-# de Cloudflare de core/http.py; sin él la capa HTTP sigue funcionando con aiohttp normal.
-RUN pip install --no-cache-dir "cloudscraper>=1.2.71"
-
 COPY . .
 
 CMD ["python", "bot.py"]

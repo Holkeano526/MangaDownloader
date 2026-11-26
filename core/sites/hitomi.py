@@ -15,7 +15,6 @@ import aiohttp
 from .base import BaseSiteHandler
 from . import hitomi_http
 from .. import config
-from ..http import crear_sesion
 from ..utils import async_finalize_pdf_flow, clean_filename, descargar_imagenes
 
 # Las imágenes se descargan con aiohttp y un límite POR galería (config.CONCURRENCIA_IMAGENES).
@@ -69,7 +68,7 @@ class HitomiHandler(BaseSiteHandler):
         # Step 1-3 (rápido): resolver la galería por HTTP, sin navegador (~0,4 s)
         try:
             timeout = aiohttp.ClientTimeout(total=30, connect=10)
-            async with crear_sesion(headers={"User-Agent": config.USER_AGENT}, timeout=timeout) as s:
+            async with aiohttp.ClientSession(headers={"User-Agent": config.USER_AGENT}, timeout=timeout) as s:
                 page_title, image_urls = await hitomi_http.resolver(gallery_id, s)
             clean_title = re.sub(r'[\\/*?:"<>|]', "", page_title).strip()
             title = clean_title or title

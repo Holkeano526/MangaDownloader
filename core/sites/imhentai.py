@@ -21,7 +21,6 @@ import aiohttp
 
 from .base import BaseSiteHandler
 from .. import config
-from ..http import crear_sesion
 from ..utils import clean_filename, download_and_make_pdf
 
 WEB = "https://imhentai.xxx"
@@ -65,7 +64,7 @@ class IMHentaiHandler(BaseSiteHandler):
         m = re.search(r"/(?:gallery|view)/(\d+)", url)
         destino = f"{WEB}/gallery/{m.group(1)}/" if m else url
         timeout = aiohttp.ClientTimeout(total=30, connect=10)
-        async with crear_sesion(headers=CABECERAS, timeout=timeout) as s:
+        async with aiohttp.ClientSession(headers=CABECERAS, timeout=timeout) as s:
             async with s.get(destino) as r:
                 pagina = await r.text(errors="replace") if r.status == 200 else ""
                 estado = r.status
