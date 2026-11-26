@@ -1,0 +1,14 @@
+# Imagen del bot de Discord en el NAS (receta OMV "manga-downloader", servicio discord_bot).
+#
+# Parte de la imagen construida el 16/08/2026 con ./Dockerfile, congelada como
+# manga-downloader-discord_bot:base-20260816. Reconstruir desde cero ya no es fiable:
+# el 25/11/2026 "pip install -r requirements.txt" (sin versiones fijadas) dejó la
+# imagen sin el comando playwright y el build falló en "playwright install chromium".
+# Los cambios de código van aquí como una capa nueva.
+#
+# Si se pierde la etiqueta base: docker tag <id de la imagen buena> manga-downloader-discord_bot:base-20260816
+FROM manga-downloader-discord_bot:base-20260816
+
+COPY . .
+
+CMD ["python", "bot.py"]
