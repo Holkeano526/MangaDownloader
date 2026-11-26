@@ -94,12 +94,23 @@ class DiscordLogAdapter:
         self.total = 0
         self.inicio = time.time()
         self.inicio_descarga = None
-        self.errores = 0
+        self.reintentos = 0      # el servidor pidió esperar (503/429) y se repitió: normal en Hitomi
+        self.paginas_perdidas = 0  # páginas que fallaron tras todos los reintentos
         self._ultima_edicion = 0.0
         self._ultima_fase = ""
+        self.cancelado = False
+
+    def check_cancel(self) -> bool:
+        return self.cancelado
+
+    async def _pedir_cancelacion(self):
+        self.cancelado = True
+        self.fase = "Cancelando (se detiene tras las imágenes en curso)..."
+        await self._editar(True)
 
     async def initialize(self):
-        self.message = await self.ctx.send(embed=self._embed())
+        self.vista = CancelarView(self.ctx.author.id, self._pedir_cancelacion)
+        self.message = await self.ctx.send(embed=self._embed(), view=self.vista)
 
     # --- Construcción del embed ---------------------------------------------
     def _embed(self, color=None, titulo=None) -> discord.Embed:
@@ -115,13 +126,15 @@ class DiscordLogAdapter:
                 velocidad = self.actual / max(0.1, time.time() - self.inicio_descarga)
                 restante = (self.total - self.actual) / max(velocidad, 0.01)
                 lineas.append(f"{velocidad:.1f} páginas/s · quedan ~{_fmt_tiempo(restante)}")
-        if self.errores:
-            lineas.append(f"⚠️ {self.errores} aviso(s) de descarga (se reintentan)")
+        if self.reintentos:
+            lineas.append(f"🔁 {self.reintentos} reintentos automáticos (el servidor limita la velocidad)")
+        if self.paginas_perdidas:
+            lineas.append(f"⚠️ {self.paginas_perdidas} página(s) no se pudieron descargar")
         embed.description = "\n".join(lineas)
         embed.set_footer(text=f"Pedido por {self.ctx.author.display_name}")
         return embed
 
-    async def _editar(self, forzar: bool = False, **kw):
+    async def _editar(self, forzar: bool = False, quitar_boton: bool = False, **kw):
         if not self.message:
             return
         ahora = time.time()
@@ -129,9 +142,17 @@ class DiscordLogAdapter:
             return  # no saturar la API de Discord
         self._ultima_edicion, self._ultima_fase = ahora, self.fase
         try:
-            await self.message.edit(embed=self._embed(**kw))
+            if quitar_boton:
+                await self.message.edit(embed=self._embed(**kw), view=None)
+            else:
+                await self.message.edit(embed=self._embed(**kw))
         except discord.errors.HTTPException:
             pass
+
+    async def cancelada(self):
+        self.fase = f"Cancelada por el usuario tras {_fmt_tiempo(time.time() - self.inicio)}"
+        await self._editar(True, quitar_boton=True, color=discord.Color.dark_grey(),
+                           titulo=f"⏹️ Descarga cancelada: {self.titulo or 'manga'}")
 
     def _programar(self, forzar: bool = False):
         try:
@@ -172,10 +193,10 @@ class DiscordLogAdapter:
             forzar = True
         elif "[INIT]" in text or "Opening reader" in text:
             self.fase = "Abriendo la página..."
-        elif "[WARN]" in text and ("Retrying" in text or "got" in text):
-            self.errores += 1
-        elif "[ERROR]" in text:
-            self.errores += 1
+        elif "Retrying" in text:
+            self.reintentos += 1
+        elif m := re.search(r"(\d+) de \d+ páginas no se pudieron descargar", text):
+            self.paginas_perdidas = int(m.group(1))
 
         # PDF generado: "[SUCCESS] PDF Generated: file.pdf"
         if m := re.search(r"\[SUCCESS\] PDF Generated: (.*)", text):
@@ -195,15 +216,17 @@ class DiscordLogAdapter:
         duracion = _fmt_tiempo(time.time() - self.inicio)
         if ok:
             tam = sum(os.path.getsize(f) for f in self.generated_files if os.path.exists(f)) / (1024 * 1024)
-            self.fase = f"Listo en {duracion} · {self.total or '?'} páginas · {tam:.1f} MB"
+            completas = (self.total or 0) - self.paginas_perdidas
+            self.fase = f"Listo en {duracion} · {completas}/{self.total or '?'} páginas · {tam:.1f} MB"
             self.actual = self.total
-            self.errores = 0
-            await self._editar(True, color=discord.Color.green(),
-                               titulo=f"✅ Descargado: {self.titulo or 'manga'}")
+            self.reintentos = 0  # ya no importan: todo llegó (o se avisa de lo que falta)
+            color = discord.Color.green() if not self.paginas_perdidas else discord.Color.orange()
+            icono = "✅" if not self.paginas_perdidas else "⚠️"
+            await self._editar(True, quitar_boton=True, color=color, titulo=f"{icono} Descargado: {self.titulo or 'manga'}")
         else:
             detalle = "\n".join(l for l in self.logs if "[ERROR]" in l or "[WARN]" in l)[-900:]
             self.fase = f"No se generó ningún PDF ({duracion})"
-            await self._editar(True, color=discord.Color.red(),
+            await self._editar(True, quitar_boton=True, color=discord.Color.red(),
                                titulo=f"❌ Falló la descarga: {self.titulo or self.url}"[:250])
             if detalle:
                 emb = self.message.embeds[0] if self.message and self.message.embeds else None
@@ -213,6 +236,27 @@ class DiscordLogAdapter:
                         await self.message.edit(embed=emb)
                     except discord.errors.HTTPException:
                         pass
+
+
+class CancelarView(discord.ui.View):
+    """Botón "Cancelar" bajo una descarga o traducción en marcha.
+    Solo lo puede pulsar quien hizo el pedido o alguien con permiso de gestionar mensajes."""
+
+    def __init__(self, autor_id: int, al_cancelar):
+        super().__init__(timeout=None)
+        self.autor_id = autor_id
+        self.al_cancelar = al_cancelar  # corrutina sin argumentos
+
+    @discord.ui.button(label="Cancelar", emoji="⏹️", style=discord.ButtonStyle.danger)
+    async def cancelar(self, interaction: discord.Interaction, button: discord.ui.Button):
+        permisos = getattr(interaction.user, "guild_permissions", None)
+        if interaction.user.id != self.autor_id and not (permisos and permisos.manage_messages):
+            await interaction.response.send_message("Solo quien lo pidió puede cancelarlo.", ephemeral=True)
+            return
+        button.disabled = True
+        button.label = "Cancelando..."
+        await interaction.response.edit_message(view=self)
+        await self.al_cancelar()
 
 
 def _fmt_tiempo(seg: float) -> str:
@@ -379,16 +423,31 @@ async def _entregar_pdf(channel, file_path: str, view: Optional[discord.ui.View]
 
 
 
-async def traducir_y_entregar(channel, ruta_pdf: str, solicitante: str, borrar_al_final: bool = False) -> None:
+async def traducir_y_entregar(channel, ruta_pdf: str, solicitante: str, borrar_al_final: bool = False,
+                              solicitante_id: Optional[int] = None) -> None:
     """Manda un PDF local a MangaScan, muestra el progreso y entrega el resultado."""
     nombre = os.path.basename(ruta_pdf)
     embed = discord.Embed(title=f"🌐 Traduciendo: {nombre}"[:250], color=discord.Color.purple(),
                           description="Comprobando MangaScan...")
     embed.set_footer(text=f"Pedido por {solicitante}")
-    mensaje = await channel.send(embed=embed)
+    estado_cancel = {"pedido": False, "task_id": None, "hecho": False}
+
+    async def pedir_cancelacion():
+        estado_cancel["pedido"] = True
+        if estado_cancel["task_id"] and not estado_cancel["hecho"]:
+            estado_cancel["hecho"] = True
+            await mangascan_client.cancelar(estado_cancel["task_id"])
+
+    vista = CancelarView(solicitante_id, pedir_cancelacion) if solicitante_id else None
+    mensaje = await (channel.send(embed=embed, view=vista) if vista else channel.send(embed=embed))
     ultimo = {"t": 0.0, "fase": ""}
 
     async def actualizar(est: mangascan_client.EstadoTraduccion, forzar: bool = False):
+        if est.task_id and not estado_cancel["task_id"]:
+            estado_cancel["task_id"] = est.task_id
+            if estado_cancel["pedido"]:  # se pulsó Cancelar durante la subida
+                estado_cancel["hecho"] = True
+                await mangascan_client.cancelar(est.task_id)
         ahora = time.time()
         if not forzar and est.fase == ultimo["fase"] and ahora - ultimo["t"] < 10:
             return  # no saturar la API de Discord
@@ -417,17 +476,22 @@ async def traducir_y_entregar(channel, ruta_pdf: str, solicitante: str, borrar_a
         async with traduccion_semaphore:
             estado, resultado = await mangascan_client.traducir_pdf(ruta_pdf, carpeta_tmp, actualizar)
         await actualizar(estado, forzar=True)
-        if resultado:
+        if estado_cancel["pedido"] or estado.fase == "Cancelada":
+            embed.title = f"⏹️ Traducción cancelada: {nombre}"[:250]
+            embed.color = discord.Color.dark_grey()
+            embed.description = "Cancelada por el usuario. MangaScan detuvo la tarea y borró sus restos."
+            await mensaje.edit(embed=embed, view=None)
+        elif resultado:
             embed.title = f"[SUCCESS] Traducido: {nombre}"[:250]
             embed.color = discord.Color.green()
-            await mensaje.edit(embed=embed)
+            await mensaje.edit(embed=embed, view=None)
             await _entregar_pdf(channel, resultado)
         else:
             embed.title = f"[ERROR] No se pudo traducir: {nombre}"[:250]
             embed.color = discord.Color.red()
             if estado.errores:
                 embed.add_field(name="Detalle", value=f"```\n{estado.errores[-1][:900]}\n```", inline=False)
-            await mensaje.edit(embed=embed)
+            await mensaje.edit(embed=embed, view=None)
     except Exception as e:
         embed.color = discord.Color.red()
         embed.description = f"[ERROR] {e}"[:1000]
@@ -471,7 +535,8 @@ class TraducirView(discord.ui.View):
         button.disabled = True
         button.label = "Traducción en marcha"
         await interaction.response.edit_message(view=self)
-        bot.loop.create_task(traducir_y_entregar(interaction.channel, self.file_path, interaction.user.display_name))
+        bot.loop.create_task(traducir_y_entregar(interaction.channel, self.file_path, interaction.user.display_name,
+                                                     solicitante_id=interaction.user.id))
 
 @bot.event
 async def on_ready():
@@ -492,17 +557,17 @@ async def descargar(ctx, url: str):
         logger.fase = "En cola (hay 3 descargas en marcha)..."
     await logger.initialize()
 
-    stop_event = False
-    def check_cancel(): return stop_event
-
     try:
         async with download_semaphore:
+            if logger.cancelado:  # cancelada mientras esperaba en cola
+                await logger.cancelada()
+                return
             logger.fase = "Abriendo la página..."
             await logger._editar(True)
             result = await core.process_entry(
                 url,
                 logger.log_callback,
-                check_cancel,
+                logger.check_cancel,
                 progress_callback=logger.progress_callback,
             )
 
@@ -515,6 +580,9 @@ async def descargar(ctx, url: str):
             return
 
         await asyncio.sleep(0.5)
+        if logger.cancelado:
+            await logger.cancelada()
+            return
         await logger.finalizar(bool(logger.generated_files))
 
         for file_path in logger.generated_files:
@@ -545,14 +613,16 @@ async def traducir(ctx, *, enlace: Optional[str] = None):  # '*': el nombre pued
             carpeta = tempfile.mkdtemp(prefix="adjunto_")
             ruta = os.path.join(carpeta, os.path.basename(a.filename))
             await a.save(ruta)
-            bot.loop.create_task(traducir_y_entregar(ctx.channel, ruta, ctx.author.display_name, borrar_al_final=True))
+            bot.loop.create_task(traducir_y_entregar(ctx.channel, ruta, ctx.author.display_name, borrar_al_final=True,
+                                                     solicitante_id=ctx.author.id))
         return
 
     if enlace:
         enlace = enlace.strip().strip('"').strip("<>")  # comillas o <enlace> de Discord
         ruta = _pdf_de_gofile(enlace) if "gofile.io" in enlace else _find_pdf_fast(os.path.basename(enlace))
         if ruta:
-            bot.loop.create_task(traducir_y_entregar(ctx.channel, ruta, ctx.author.display_name))
+            bot.loop.create_task(traducir_y_entregar(ctx.channel, ruta, ctx.author.display_name,
+                                                     solicitante_id=ctx.author.id))
         elif "gofile.io" in enlace:
             await ctx.send("[ERROR] No encuentro en el NAS el PDF de ese enlace. Solo funciona con enlaces "
                            "que subió este bot; si tienes el PDF, adjúntalo o descárgalo de nuevo con !descargar.")

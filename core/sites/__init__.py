@@ -1,4 +1,3 @@
-
 from .tmo import TMOHandler
 from .m440 import M440Handler
 from .h2r import H2RHandler
@@ -8,3 +7,6 @@ from .zonatmo import ZonaTMOHandler
 from .fakku import FakkuHandler
 from .hentalk import HentalkHandler
 from .shademanga import ShadeMangaHandler
+from .tmohentai_app import TMOHentaiAppHandler
+from .lectorhentai import LectorHentaiHandler
+from .hentainexus import HentaiNexusHandler

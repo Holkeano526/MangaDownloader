@@ -221,6 +221,11 @@ class HitomiHandler(BaseSiteHandler):
             download_targets = await descargar_imagenes(
                 image_urls, temp_dir, headers, log_callback, check_cancel, progress_callback
             )
+            if check_cancel():
+                # Cancelado: no se genera un PDF a medias
+                log_callback("[INFO] Process cancelled by user.")
+                shutil.rmtree(temp_dir, ignore_errors=True)
+                return
             log_callback(f"\n[INFO] Download finished. {len(download_targets)} images retrieved.")
             if len(download_targets) < len(image_urls):
                 log_callback(f"[WARN] {len(image_urls) - len(download_targets)} de {len(image_urls)} páginas no se pudieron descargar.")
