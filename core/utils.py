@@ -19,7 +19,6 @@ except ImportError:
     img2pdf = None
 
 from .config import PDF_FOLDER_NAME, TEMP_FOLDER_NAME, CONCURRENCIA_IMAGENES, REINTENTOS_IMAGEN, JPEG_CALIDAD
-from .http import SesionHTTP, crear_sesion
 from concurrent.futures import ThreadPoolExecutor
 
 def clean_filename(text: str) -> str:
@@ -38,7 +37,7 @@ def clean_filename(text: str) -> str:
     safe = re.sub(r'[\\/*?:"<>|]', "", text).strip()
     return safe if safe else "untitled"
 
-async def download_image(session: SesionHTTP, url: str, folder: str, index: int, log_callback: Callable[[str], None], headers: Optional[dict] = None) -> Optional[str]:
+async def download_image(session: aiohttp.ClientSession, url: str, folder: str, index: int, log_callback: Callable[[str], None], headers: Optional[dict] = None) -> Optional[str]:
     """
     Descarga una imagen con reintentos (429/5xx/timeouts, espera creciente).
     Antes un fallo dejaba la página fuera del PDF sin reintentar.
@@ -92,7 +91,7 @@ async def descargar_imagenes(urls: List[str], folder: str, headers: dict, log_ca
     timeout = aiohttp.ClientTimeout(total=120, connect=15, sock_read=60)
     connector = aiohttp.TCPConnector(limit=concurrencia * 2, limit_per_host=concurrencia, ttl_dns_cache=300)
 
-    async with crear_sesion(headers=headers, timeout=timeout, connector=connector) as session:
+    async with aiohttp.ClientSession(headers=headers, timeout=timeout, connector=connector) as session:
         async def una(idx: int, url: str) -> Optional[str]:
             nonlocal hechas
             async with sem:

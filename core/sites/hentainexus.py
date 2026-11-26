@@ -24,7 +24,6 @@ import aiohttp
 
 from .base import BaseSiteHandler
 from .. import config
-from ..http import crear_sesion
 from ..utils import clean_filename, download_and_make_pdf
 
 WEB = "https://hentainexus.com"
@@ -138,7 +137,7 @@ class HentaiNexusHandler(BaseSiteHandler):
 
     async def _resolver_http(self, gid: str) -> Tuple[str, List[str]]:
         headers = {"User-Agent": config.USER_AGENT, "Referer": f"{WEB}/view/{gid}"}
-        async with crear_sesion(headers=headers, timeout=aiohttp.ClientTimeout(total=30)) as s:
+        async with aiohttp.ClientSession(headers=headers, timeout=aiohttp.ClientTimeout(total=30)) as s:
             async with s.get(f"{WEB}/read/{gid}") as r:
                 if r.status != 200:
                     raise ErrorDescifrado(f"el lector respondió {r.status}")
