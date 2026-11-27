@@ -16,4 +16,9 @@ RUN find /app -mindepth 1 -delete
 
 COPY . .
 
+# glibc crea un "arena" de memoria por hilo (hasta 8 por CPU) y casi nunca los devuelve al
+# sistema: el 26/11/2026 el bot tenía ~26 arenas de 64 MB llenos tras generar un PDF de
+# 347 MB en un hilo. Con 2 la memoria libre se reutiliza en vez de repartirse.
+ENV MALLOC_ARENA_MAX=2
+
 CMD ["python", "bot.py"]

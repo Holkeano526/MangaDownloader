@@ -12,14 +12,10 @@ import subprocess
 import sys
 import uuid
 from typing import List, Optional, Callable
-from PIL import Image
-try:
-    import img2pdf
-except ImportError:
-    img2pdf = None
+import json
 
 from .config import PDF_FOLDER_NAME, TEMP_FOLDER_NAME, CONCURRENCIA_IMAGENES, REINTENTOS_IMAGEN, JPEG_CALIDAD
-from concurrent.futures import ThreadPoolExecutor
+from .pdf_worker import preparar_para_pdf as _preparar_para_pdf, generar_pdf as _generar_pdf
 
 def clean_filename(text: str) -> str:
     """
@@ -127,73 +123,60 @@ def _cpus_disponibles() -> int:
 
 def preparar_para_pdf(path: str) -> str:
     """JPEG/PNG van tal cual; WebP/AVIF/transparencias se convierten a JPEG (img2pdf no los admite)."""
+    return _preparar_para_pdf(path, JPEG_CALIDAD)
+
+
+_PDF_WORKER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pdf_worker.py")
+_PDF_WORKER_TIMEOUT = 1800  # 30 min: un PDF de cientos de páginas WebP en un NAS lento
+
+
+def _ruta_para_log(output_pdf: str) -> str:
     try:
-        with Image.open(path) as img:
-            ext_lower = os.path.splitext(path)[1].lower()
-            needs_conversion = (
-                img.mode in ("RGBA", "LA") or
-                (img.mode == "P" and "transparency" in img.info) or
-                ext_lower not in (".jpg", ".jpeg", ".png")
-            )
-            if needs_conversion:
-                new_path = f"{os.path.splitext(path)[0]}_converted.jpg"
-                img.convert("RGB").save(new_path, "JPEG", quality=JPEG_CALIDAD)
-                return new_path
+        pdf_root = os.path.join(os.getcwd(), PDF_FOLDER_NAME)
+        if os.path.abspath(output_pdf).startswith(os.path.abspath(pdf_root)):
+            logged_path = os.path.relpath(output_pdf, pdf_root)
+        else:
+            logged_path = os.path.basename(output_pdf)
+        return logged_path.replace("\\", "/")
     except Exception:
-        pass
-    return path
+        return os.path.basename(output_pdf)
 
 
 def create_pdf(image_paths: List[str], output_pdf: str, log_callback: Callable[[str], None]) -> bool:
-    """Compiles a list of image paths into a single PDF using img2pdf (if available) or Pillow."""
+    """Compiles a list of image paths into a single PDF using img2pdf (if available) or Pillow.
+
+    Se genera en un proceso aparte (core/pdf_worker.py) para que la memoria del PDF
+    (cientos de MB) vuelva al sistema al terminar; ver la explicación en pdf_worker.
+    """
     if not image_paths:
         log_callback("[WARN] No images to compile into PDF.")
         return False
 
+    pedido = json.dumps({"paths": image_paths, "output": output_pdf,
+                         "calidad": JPEG_CALIDAD, "hilos": _cpus_disponibles()})
     try:
-        # Decodificar WebP/AVIF es lo caro: en paralelo (Pillow libera el GIL al decodificar)
-        with ThreadPoolExecutor(max_workers=_cpus_disponibles()) as ex:
-            final_paths = list(ex.map(preparar_para_pdf, image_paths))
-        if img2pdf:
-            with open(output_pdf, "wb") as f:
-                f.write(img2pdf.convert(final_paths, rotation=img2pdf.Rotation.ifvalid))
-        else:
-            raise ImportError("img2pdf not installed")
+        proc = subprocess.run([sys.executable, _PDF_WORKER], input=pedido.encode("utf-8"),
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=_PDF_WORKER_TIMEOUT)
+        for linea in proc.stdout.decode("utf-8", "replace").splitlines():
+            if linea.strip():
+                log_callback(linea)
+        if proc.returncode != 0 and proc.stderr:
+            ultima = proc.stderr.decode("utf-8", "replace").strip().splitlines()[-1:]
+            if ultima:
+                log_callback(f"[ERROR] PDF worker: {ultima[0][:300]}")
+        ok = proc.returncode == 0
+    except subprocess.TimeoutExpired:
+        log_callback(f"[ERROR] PDF worker: more than {_PDF_WORKER_TIMEOUT}s, aborted.")
+        ok = False
+    except OSError as e:
+        # No se pudo lanzar el proceso (raro): se genera aquí, como antes
+        log_callback(f"[WARN] PDF worker unavailable ({e}); generating in-process.")
+        ok = _generar_pdf(image_paths, output_pdf, log_callback,
+                          calidad=JPEG_CALIDAD, hilos=_cpus_disponibles())
 
-        try:
-            project_root = os.getcwd()
-            pdf_root = os.path.join(project_root, PDF_FOLDER_NAME)
-            
-            if os.path.abspath(output_pdf).startswith(os.path.abspath(pdf_root)):
-                 logged_path = os.path.relpath(output_pdf, pdf_root)
-            else:
-                 logged_path = os.path.basename(output_pdf)
-            logged_path = logged_path.replace("\\", "/")
-        except:
-             logged_path = os.path.basename(output_pdf)
-
-        log_callback(f"[SUCCESS] PDF Generated: {logged_path}")
-        return True
-
-    except Exception as e:
-        log_callback(f"[ERROR] Failed to save PDF (img2pdf): {e}")
-        try:
-            log_callback("[INFO] Trying alternative method (Pillow)...")
-            images = []
-            for path in image_paths:
-                try:
-                    with Image.open(path) as img:
-                        if img.mode in ("RGBA", "P"): img = img.convert("RGB")
-                        images.append(img.copy())
-                except: pass
-                
-            if images:
-                images[0].save(output_pdf, "PDF", resolution=100.0, save_all=True, append_images=images[1:])
-                return True
-        except Exception as e2:
-             log_callback(f"[ERROR] Alternative method failed: {e2}")
-        
-        return False
+    if ok:
+        log_callback(f"[SUCCESS] PDF Generated: {_ruta_para_log(output_pdf)}")
+    return ok
 
 def _open_file_or_folder(file_path: str):
     """
