@@ -14,6 +14,10 @@ FROM manga-downloader-discord_bot:base-20260816
 # del repo (src/, handlers viejos...) seguirían dentro de la imagen.
 RUN find /app -mindepth 1 -delete
 
+# yt-dlp (no está en la base congelada) solo lee los tuits para !twitter; la descarga la hace el bot.
+# Va antes del COPY para que la capa se reutilice en cada cambio de código. Versión fijada.
+RUN pip install --no-cache-dir yt-dlp==2026.10.21
+
 COPY . .
 
 # glibc crea un "arena" de memoria por hilo (hasta 8 por CPU) y casi nunca los devuelve al

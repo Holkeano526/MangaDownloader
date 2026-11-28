@@ -1,5 +1,6 @@
 # pip freeze de la imagen del bot en el NAS (Python 3.10.21), 27/11/2026.
 # Para reproducir la imagen exacta: pip install -r requirements-lock.txt
+# + yt-dlp==2026.10.21 (27/11/2026, !twitter; instalado en Dockerfile.bot)
 aiofiles==25.1.0
 aiohappyeyeballs==2.7.1
 aiohttp==3.14.3
@@ -17,8 +18,8 @@ certifi==2026.7.22
 cffi==2.1.1
 chardet==7.6.0
 charset-normalizer==3.5.1
-click==8.4.2
 click-log==0.4.0
+click==8.4.2
 Crawl4AI==0.9.2
 cryptography==50.0.0
 cssselect==1.5.0
@@ -37,10 +38,10 @@ h11==0.16.0
 h2==4.4.1
 hf-xet==1.6.0
 hpack==4.2.0
-httpcore==1.0.9
 httpcore2==2.10.0
-httpx==0.28.1
+httpcore==1.0.9
 httpx2==2.10.0
+httpx==0.28.1
 huggingface_hub==1.27.0
 humanize==4.16.0
 hyperframe==6.1.0
@@ -50,8 +51,8 @@ importlib_metadata==9.0.0
 Jinja2==3.1.6
 jiter==0.16.0
 joblib==1.5.3
-jsonschema==4.26.0
 jsonschema-specifications==2025.9.1
+jsonschema==4.26.0
 lark==1.3.1
 lxml==6.1.1
 markdown-it-py==4.2.0
@@ -66,8 +67,8 @@ packaging==26.3
 patchright==1.61.2
 pikepdf==10.11.0
 pillow==12.3.0
-playwright==1.62.0
 playwright-stealth==2.0.3
+playwright==1.62.0
 propcache==0.5.2
 psutil==7.2.2
 pycparser==3.0
@@ -105,4 +106,5 @@ uvicorn==0.52.3
 websockets==16.1.1
 xxhash==3.8.1
 yarl==1.24.5
+yt-dlp==2026.10.21
 zipp==4.1.0

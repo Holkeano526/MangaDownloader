@@ -22,6 +22,7 @@ from .sites import (
     ShadeMangaHandler,
     SexKomix2Handler,
     AllPornComicHandler,
+    TwitterHandler,
     IMHentaiHandler,
     EromeHandler,
     BunkrHandler,
@@ -47,6 +48,7 @@ HANDLERS = [
     ShadeMangaHandler(),
     SexKomix2Handler(),
     AllPornComicHandler(),
+    TwitterHandler(),        # vídeos de tuits públicos (x.com, twitter.com y espejos fx/vx)
     EromeHandler(),
     BunkrHandler(),
     NotFansHandler(),
