@@ -28,7 +28,7 @@ def test_mejor_mp4_elige_la_directa_de_mas_calidad():
 
 def test_motivo_error_traduce_los_casos_conocidos():
     assert "iniciar sesión" in tw.motivo_error("ERROR: [twitter] 1: NSFW tweet requires authentication")
-    assert "no tiene vídeo" in tw.motivo_error("ERROR: [twitter] 1: No video could be found in this tweet")
+    assert "Age-restricted" in tw.motivo_error("ERROR: [twitter] 1: No video could be found in this tweet")
     assert "no existe" in tw.motivo_error("ERROR: Requested tweet is unavailable")
 
 
