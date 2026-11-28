@@ -91,7 +91,7 @@ class LectorHentaiHandler(BaseSiteHandler):
                 t = re.sub(r"^Leer\s+", "", t, flags=re.I)
                 if t:
                     return t
-        except aiohttp.ClientError:
+        except (aiohttp.ClientError, asyncio.TimeoutError):
             pass
         return slug.replace("-", " ").title() or f"LectorHentai_{manga_id}"
 
@@ -104,7 +104,7 @@ class LectorHentaiHandler(BaseSiteHandler):
                     async with s.get(url, headers={"Range": "bytes=0-0"}) as g:
                         return g.status in (200, 206) and g.content_type.startswith("image/")
                 return r.status == 200 and r.content_type.startswith("image/")
-        except aiohttp.ClientError:
+        except (aiohttp.ClientError, asyncio.TimeoutError):
             return False
 
     async def _resolver_http(self, s: aiohttp.ClientSession, manga_id: str) -> List[str]:

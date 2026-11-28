@@ -80,110 +80,112 @@ class ShadeMangaHandler(BaseSiteHandler):
         current_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         unique_id = uuid.uuid4().hex[:8]
         temp_dir = os.path.join(current_dir, config.TEMP_FOLDER_NAME, f"shademanga_{unique_id}")
-        if os.path.exists(temp_dir):
-            shutil.rmtree(temp_dir)
         os.makedirs(temp_dir, exist_ok=True)
+
+        # try/finally: la carpeta temporal se borra también con los "return" tempranos y las
+        # excepciones.
+        try:
+            download_targets = []
         
-        download_targets = []
-        
-        async with async_playwright() as p:
-            is_headless = os.getenv("HEADLESS", "false").lower() == "true" or not os.getenv("DISPLAY")
-            if os.name == 'nt': 
-                is_headless = True
+            async with async_playwright() as p:
+                is_headless = os.getenv("HEADLESS", "false").lower() == "true" or not os.getenv("DISPLAY")
+                if os.name == 'nt': 
+                    is_headless = True
             
-            browser = await p.chromium.launch(
-                headless=is_headless, 
-                args=["--no-sandbox", "--disable-setuid-sandbox", "--start-maximized"]
-            )
-            context = await browser.new_context(
-                user_agent=config.USER_AGENT,
-                viewport={'width': 1280, 'height': 720}
-            )
-            page = await context.new_page()
+                browser = await p.chromium.launch(
+                    headless=is_headless, 
+                    args=["--no-sandbox", "--disable-setuid-sandbox", "--start-maximized"]
+                )
+                context = await browser.new_context(
+                    user_agent=config.USER_AGENT,
+                    viewport={'width': 1280, 'height': 720}
+                )
+                page = await context.new_page()
             
-            try:
-                log_callback(f"[INFO] Opening reader: {url}")
-                await page.goto(url, wait_until="networkidle")
-                
-                # Extra time for images to populate dynamically
-                await page.wait_for_timeout(3000)
-                
-                html_content = await page.content()
-                
-                urls = re.findall(r'https://cdn\.shadowmanga\.es/mangas/[a-zA-Z0-9\-\./_]+\.(?:webp|jpg|jpeg|png)', html_content)
-                urls = list(dict.fromkeys(urls))
-                
-                if not urls:
-                    log_callback("[ERROR] No se encontraron imágenes del manga en el DOM.")
-                    return
-                
-                total_pages = len(urls)
-                log_callback(f"[INFO] Total pages detected: {total_pages}")
-                
-                title = f"ShadeManga_{unique_id}"
                 try:
-                    parts = urls[0].split('/')
-                    manga_name = parts[-3]
-                    chapter = parts[-2]
-                    title = f"{manga_name}_ch_{chapter}"
-                except Exception:
-                    pass
-                    
-                log_callback(f"[INFO] Deduced Manga Title: {title}")
+                    log_callback(f"[INFO] Opening reader: {url}")
+                    await page.goto(url, wait_until="networkidle")
                 
-                for i, img_url in enumerate(urls, start=1):
-                    if check_cancel():
-                        log_callback("[WARN] Process cancelled by user.")
-                        break
-
+                    # Extra time for images to populate dynamically
+                    await page.wait_for_timeout(3000)
+                
+                    html_content = await page.content()
+                
+                    urls = re.findall(r'https://cdn\.shadowmanga\.es/mangas/[a-zA-Z0-9\-\./_]+\.(?:webp|jpg|jpeg|png)', html_content)
+                    urls = list(dict.fromkeys(urls))
+                
+                    if not urls:
+                        log_callback("[ERROR] No se encontraron imágenes del manga en el DOM.")
+                        return
+                
+                    total_pages = len(urls)
+                    log_callback(f"[INFO] Total pages detected: {total_pages}")
+                
+                    title = f"ShadeManga_{unique_id}"
                     try:
-                        log_callback(f"[DEBUG] Fetching page {i}: {img_url}")
-                        
-                        response = await page.request.get(img_url, headers={"Referer": url})
-                        
-                        if response.status == 200:
-                            data = await response.body()
-                            ext = img_url.split('.')[-1]
-                            if '?' in ext:
-                                ext = ext.split('?')[0]
-                                
-                            filename = f"{i:03d}.{ext}"
-                            filepath = os.path.join(temp_dir, filename)
-                            
-                            await asyncio.to_thread(_escribir, filepath, data)
-                            
-                            download_targets.append(filepath)
-                            
-                            if progress_callback:
-                                progress_callback(i, total_pages)
-                        else:
-                            log_callback(f"[ERROR] Page {i} failed with status {response.status}")
-                        
-                        await page.wait_for_timeout(200)
-                        
-                    except Exception as e:
-                        log_callback(f"[ERROR] Error downloading page {i}: {e}")
-
-                log_callback(f"\n[INFO] Download finished. {len(download_targets)} images retrieved.")
+                        parts = urls[0].split('/')
+                        manga_name = parts[-3]
+                        chapter = parts[-2]
+                        title = f"{manga_name}_ch_{chapter}"
+                    except Exception:
+                        pass
+                    
+                    log_callback(f"[INFO] Deduced Manga Title: {title}")
                 
-            except Exception as e:
-                log_callback(f"[ERROR] Playwright global error: {e}")
-            finally:
-                await browser.close()
+                    for i, img_url in enumerate(urls, start=1):
+                        if check_cancel():
+                            log_callback("[WARN] Process cancelled by user.")
+                            break
 
-        if check_cancel():
-            # Cancelado a mitad: no se entrega un PDF parcial.
+                        try:
+                            log_callback(f"[DEBUG] Fetching page {i}: {img_url}")
+                        
+                            response = await page.request.get(img_url, headers={"Referer": url})
+                        
+                            if response.status == 200:
+                                data = await response.body()
+                                ext = img_url.split('.')[-1]
+                                if '?' in ext:
+                                    ext = ext.split('?')[0]
+                                
+                                filename = f"{i:03d}.{ext}"
+                                filepath = os.path.join(temp_dir, filename)
+                            
+                                await asyncio.to_thread(_escribir, filepath, data)
+                            
+                                download_targets.append(filepath)
+                            
+                                if progress_callback:
+                                    progress_callback(i, total_pages)
+                            else:
+                                log_callback(f"[ERROR] Page {i} failed with status {response.status}")
+                        
+                            await page.wait_for_timeout(200)
+                        
+                        except Exception as e:
+                            log_callback(f"[ERROR] Error downloading page {i}: {e}")
+
+                    log_callback(f"\n[INFO] Download finished. {len(download_targets)} images retrieved.")
+                
+                except Exception as e:
+                    log_callback(f"[ERROR] Playwright global error: {e}")
+                finally:
+                    await browser.close()
+
+            if check_cancel():
+                # Cancelado a mitad: no se entrega un PDF parcial.
+                return
+            if download_targets:
+                pdf_name = f"{clean_filename(title)}.pdf"
+                # Asíncrono: create_pdf corre en un hilo y no congela el bot mientras arma el PDF.
+                await async_finalize_pdf_flow(
+                    download_targets, 
+                    pdf_name, 
+                    log_callback, 
+                    temp_dir,
+                    open_result=config.OPEN_RESULT_ON_FINISH
+                )
+            else:
+                log_callback("[ERROR] No images downloaded for PDF.")
+        finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
-            return
-        if download_targets:
-            pdf_name = f"{clean_filename(title)}.pdf"
-            # Asíncrono: create_pdf corre en un hilo y no congela el bot mientras arma el PDF.
-            await async_finalize_pdf_flow(
-                download_targets, 
-                pdf_name, 
-                log_callback, 
-                temp_dir,
-                open_result=config.OPEN_RESULT_ON_FINISH
-            )
-        else:
-            log_callback("[ERROR] No images downloaded for PDF.")

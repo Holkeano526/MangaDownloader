@@ -5,7 +5,11 @@ It parses incoming URLs and delegates the scraping/downloading process to
 the appropriate site-specific handler (e.g., TMO, Hitomi, NHentai).
 """
 
+import asyncio
 from typing import Callable, Optional
+
+import aiohttp
+
 from .sites import (
     TMOHentaiAppHandler,
     LectorHentaiHandler,
@@ -79,7 +83,15 @@ async def process_entry(
         # por dominio completo o subdominio. Antes se buscaba el texto en netloc, y
         # "https://sexkomix2.com@192.168.1.1/" o "nhentai.10.0.0.5.nip.io" pasaban el filtro.
         if any(dominio_coincide(hostname, d) for d in handler.get_supported_domains()):
-            return await handler.process(url, log_callback, check_cancel, progress_callback)
+            # Un timeout (asyncio.TimeoutError no es un aiohttp.ClientError) o un fallo de red que
+            # el handler no captura llegaba al bot como "Critical error: " sin texto.
+            try:
+                return await handler.process(url, log_callback, check_cancel, progress_callback)
+            except asyncio.TimeoutError:
+                log_callback(f"[ERROR] {hostname} no respondió a tiempo (timeout). Inténtalo más tarde.")
+            except aiohttp.ClientError as e:
+                log_callback(f"[ERROR] No se pudo conectar con {hostname}: {type(e).__name__}: {e}")
+            return None
 
     if any(dominio_coincide(hostname, d) for d in BLOQUEADOS_CLOUDFLARE):
         log_callback(f"[ERROR] {hostname} está protegido por Cloudflare (desafío anti-bots en todas sus páginas) "

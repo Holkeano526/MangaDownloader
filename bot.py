@@ -18,13 +18,16 @@ from discord.ext import commands
 import os
 import asyncio
 import re
+import shutil
 import aiohttp
 import io
 import json
 import mimetypes
 import tempfile
+import threading
 import time
-from typing import Optional, Dict
+import traceback
+from typing import Optional, Set
 from dotenv import load_dotenv
 
 import core
@@ -50,38 +53,80 @@ bot = commands.Bot(command_prefix='!', intents=intents)
 # Semaphore to allow up to 3 concurrent downloads (instead of a global Lock)
 download_semaphore = asyncio.Semaphore(3)
 
-# PDF file index cache: maps filename -> full path for O(1) lookup
-# Built lazily and refreshed on cache miss
-_pdf_index_cache: Dict[str, str] = {}
-_pdf_index_built = False
+# Tareas en segundo plano: se guarda una referencia para que el recolector no las
+# destruya a medias y para registrar sus excepciones (create_task suelto las pierde).
+_tareas: Set[asyncio.Task] = set()
 
 
-def _build_pdf_index():
-    """Builds a filename->fullpath index of the PDF folder for O(1) lookups."""
-    global _pdf_index_cache, _pdf_index_built
-    current_dir = os.getcwd()
-    pdf_root = os.path.join(current_dir, core.config.PDF_FOLDER_NAME)
-    _pdf_index_cache.clear()
-    if os.path.exists(pdf_root):
-        for root, dirs, files in os.walk(pdf_root):
-            for fname in files:
-                _pdf_index_cache[fname] = os.path.join(root, fname)
-    _pdf_index_built = True
+def spawn(coro, canal=None) -> asyncio.Task:
+    """Lanza una corrutina en segundo plano; si falla, lo registra y avisa en `canal` (si se da)."""
+    tarea = bot.loop.create_task(coro)
+    _tareas.add(tarea)
+
+    def _al_terminar(t: asyncio.Task):
+        _tareas.discard(t)
+        if t.cancelled():
+            return
+        exc = t.exception()
+        if exc is None:
+            return
+        print(f"[ERROR] Tarea en segundo plano: {exc!r}")
+        traceback.print_exception(type(exc), exc, exc.__traceback__)
+        if canal is not None:
+            async def _avisar():
+                try:
+                    await canal.send(f"[ERROR] Algo falló: {exc}"[:1900])
+                except discord.errors.HTTPException:
+                    pass
+            aviso = bot.loop.create_task(_avisar())
+            _tareas.add(aviso)
+            aviso.add_done_callback(_tareas.discard)
+
+    tarea.add_done_callback(_al_terminar)
+    return tarea
+
+
+def _pdf_root() -> str:
+    return os.path.join(os.getcwd(), core.config.PDF_FOLDER_NAME)
+
+
+# Búsqueda por nombre en PDF/ (solo !traducir <nombre.pdf> y logs antiguos sin ruta).
+# Se llama desde el hilo del PDF y desde el event loop: el Lock evita recorridos simultáneos.
+_pdf_busqueda_lock = threading.Lock()
 
 
 def _find_pdf_fast(filename: str) -> Optional[str]:
-    """O(1) lookup for a PDF file in the PDF directory. Rebuilds index on cache miss."""
-    global _pdf_index_cache, _pdf_index_built
-    if not _pdf_index_built:
-        _build_pdf_index()
-    
-    result = _pdf_index_cache.get(filename)
-    if result and os.path.exists(result):
-        return result
-    
-    # Cache miss or stale entry: rebuild and retry
-    _build_pdf_index()
-    return _pdf_index_cache.get(filename)
+    """Busca un archivo por nombre dentro de PDF/. Bloqueante: desde async, usar asyncio.to_thread."""
+    filename = os.path.basename(filename)
+    if not filename:
+        return None
+    with _pdf_busqueda_lock:
+        raiz = _pdf_root()
+        if not os.path.isdir(raiz):
+            return None
+        for root, dirs, files in os.walk(raiz):
+            if filename in files:
+                return os.path.join(root, filename)
+    return None
+
+
+def _resolver_generado(ruta_log: str) -> Optional[str]:
+    """Ruta real del archivo que anuncia el core: absoluta, relativa a PDF/ o (último recurso) por nombre."""
+    if os.path.isabs(ruta_log):
+        return ruta_log if os.path.exists(ruta_log) else None
+    candidata = os.path.normpath(os.path.join(_pdf_root(), ruta_log))
+    if os.path.exists(candidata):
+        return candidata
+    encontrada = _find_pdf_fast(ruta_log)
+    if encontrada:
+        return encontrada
+    return os.path.abspath(ruta_log) if os.path.exists(ruta_log) else None
+
+
+def _permitido(ctx, interaction) -> bool:
+    """Solo quien lanzó el comando (o un moderador) usa los botones y menús de su mensaje."""
+    permisos = getattr(interaction.user, "guild_permissions", None)
+    return interaction.user.id == ctx.author.id or bool(permisos and permisos.manage_messages)
 
 class DiscordLogAdapter:
     """
@@ -179,7 +224,7 @@ class DiscordLogAdapter:
         except RuntimeError:
             loop = None
         if loop is bot.loop:
-            bot.loop.create_task(self._editar(forzar))
+            spawn(self._editar(forzar))
         else:  # llamado desde un hilo (p. ej. creación del PDF)
             asyncio.run_coroutine_threadsafe(self._editar(forzar), bot.loop)
 
@@ -234,15 +279,9 @@ class DiscordLogAdapter:
 
         # Archivo generado: "[SUCCESS] PDF Generated: file.pdf" o "[SUCCESS] File Generated: video.mp4"
         if m := re.search(r"\[SUCCESS\] (?:PDF|File) Generated: (.*)", text):
-            filename = m.group(1).strip()
-            if os.path.isabs(filename) and os.path.exists(filename):
-                self.generated_files.append(filename)
-            else:
-                result = _find_pdf_fast(filename)
-                if result:
-                    self.generated_files.append(result)
-                elif os.path.exists(filename):
-                    self.generated_files.append(filename)
+            ruta = _resolver_generado(m.group(1).strip())
+            if ruta:
+                self.generated_files.append(ruta)
 
         self._programar(forzar)
 
@@ -319,6 +358,16 @@ def _barra(actual: int, total: int, ancho: int = 20) -> str:
 _gofile_token: Optional[str] = None
 _gofile_root: Optional[str] = None
 _gofile_public_folder: Optional[str] = None
+# Evita que dos primeras subidas simultáneas creen dos cuentas/carpetas de invitado
+_gofile_lock = asyncio.Lock()
+_GOFILE_TIMEOUT_API = aiohttp.ClientTimeout(total=60, sock_connect=15)
+_GOFILE_TIMEOUT_SUBIDA = aiohttp.ClientTimeout(total=1800, sock_connect=30, sock_read=300)
+
+
+def _gofile_reset() -> None:
+    """Olvida la cuenta de invitado: la siguiente subida crea una nueva (token caducado, 401/403...)."""
+    global _gofile_token, _gofile_root, _gofile_public_folder
+    _gofile_token = _gofile_root = _gofile_public_folder = None
 
 
 async def _ensure_gofile_account() -> bool:
@@ -326,16 +375,19 @@ async def _ensure_gofile_account() -> bool:
     global _gofile_token, _gofile_root
     if _gofile_token:
         return True
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.post('https://api.gofile.io/accounts', json={}) as resp:
-                data = await resp.json()
-                if resp.status == 200 and data.get('status') == 'ok':
-                    _gofile_token = data['data'].get('token')
-                    _gofile_root = data['data'].get('rootFolder')
-                    return bool(_gofile_token)
-    except Exception as e:
-        print(f"[ERROR GOFILE] account: {e}")
+    async with _gofile_lock:
+        if _gofile_token:  # otra subida la creó mientras se esperaba el lock
+            return True
+        try:
+            async with aiohttp.ClientSession(timeout=_GOFILE_TIMEOUT_API) as session:
+                async with session.post('https://api.gofile.io/accounts', json={}) as resp:
+                    data = await resp.json()
+                    if resp.status == 200 and data.get('status') == 'ok':
+                        _gofile_token = data['data'].get('token')
+                        _gofile_root = data['data'].get('rootFolder')
+                        return bool(_gofile_token)
+        except Exception as e:
+            print(f"[ERROR GOFILE] account: {e}")
     return False
 
 
@@ -350,24 +402,30 @@ async def _ensure_gofile_public_folder() -> Optional[str]:
         return _gofile_public_folder
     if not await _ensure_gofile_account():
         return None
-    try:
-        headers = {'Authorization': f'Bearer {_gofile_token}'}
-        async with aiohttp.ClientSession() as session:
-            payload = {
-                'parentFolderId': _gofile_root,
-                'folderName': 'manga',
-                'public': True,
-            }
-            async with session.post(
-                'https://api.gofile.io/contents/createFolder',
-                json=payload,
-                headers=headers,
-            ) as resp:
-                data = await resp.json()
-                if resp.status == 200 and data.get('status') == 'ok':
-                    _gofile_public_folder = data['data'].get('id')
-    except Exception as e:
-        print(f"[ERROR GOFILE] public folder: {e}")
+    async with _gofile_lock:
+        if _gofile_public_folder:
+            return _gofile_public_folder
+        try:
+            headers = {'Authorization': f'Bearer {_gofile_token}'}
+            async with aiohttp.ClientSession(timeout=_GOFILE_TIMEOUT_API) as session:
+                payload = {
+                    'parentFolderId': _gofile_root,
+                    'folderName': 'manga',
+                    'public': True,
+                }
+                async with session.post(
+                    'https://api.gofile.io/contents/createFolder',
+                    json=payload,
+                    headers=headers,
+                ) as resp:
+                    if resp.status in (401, 403):
+                        _gofile_reset()
+                        return None
+                    data = await resp.json()
+                    if resp.status == 200 and data.get('status') == 'ok':
+                        _gofile_public_folder = data['data'].get('id')
+        except Exception as e:
+            print(f"[ERROR GOFILE] public folder: {e}")
     return _gofile_public_folder
 
 
@@ -378,8 +436,12 @@ async def upload_to_gofile(file_path: str) -> Optional[str]:
             return None
         headers = {'Authorization': f'Bearer {_gofile_token}'}
         folder_id = await _ensure_gofile_public_folder() or _gofile_root
-        async with aiohttp.ClientSession() as session:
-            async with session.get('https://api.gofile.io/servers', headers=headers) as resp:
+        async with aiohttp.ClientSession(timeout=_GOFILE_TIMEOUT_SUBIDA) as session:
+            async with session.get('https://api.gofile.io/servers', headers=headers,
+                                   timeout=_GOFILE_TIMEOUT_API) as resp:
+                if resp.status in (401, 403):
+                    _gofile_reset()
+                    return None
                 if resp.status != 200: return None
                 data = await resp.json()
                 if data.get('status') != 'ok': return None
@@ -408,6 +470,9 @@ async def upload_to_gofile(file_path: str) -> Optional[str]:
                         res = await upload_resp.json()
                         if res.get('status') == 'ok':
                             return res['data']['downloadPage']
+                    # Token o carpeta inválidos (cuenta de invitado caducada): se recrean en la próxima subida
+                    print(f"[ERROR GOFILE] upload HTTP {upload_resp.status}")
+                    _gofile_reset()
     except Exception as e:
         print(f"[ERROR GOFILE] {e}")
     return None
@@ -424,11 +489,19 @@ def _registrar_gofile(link: str, file_path: str) -> None:
     try:
         datos = {}
         if os.path.exists(_GOFILE_INDEX):
-            with open(_GOFILE_INDEX, encoding="utf-8") as f:
-                datos = json.load(f)
+            try:
+                with open(_GOFILE_INDEX, encoding="utf-8") as f:
+                    datos = json.load(f)
+            except json.JSONDecodeError:
+                datos = {}  # índice corrupto (p. ej. escritura cortada): se empieza de nuevo
+            if not isinstance(datos, dict):
+                datos = {}
         datos[link.rstrip("/")] = os.path.abspath(file_path)
-        with open(_GOFILE_INDEX, "w", encoding="utf-8") as f:
+        # Escritura atómica: un corte a mitad no deja el JSON a medias
+        tmp = _GOFILE_INDEX + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
             json.dump(datos, f, ensure_ascii=False, indent=1)
+        os.replace(tmp, _GOFILE_INDEX)
     except Exception as e:
         print(f"[WARN] No se pudo registrar el enlace de GoFile: {e}")
 
@@ -581,12 +654,71 @@ class TraducirView(discord.ui.View):
         button.disabled = True
         button.label = "Traducción en marcha"
         await interaction.response.edit_message(view=self)
-        bot.loop.create_task(traducir_y_entregar(interaction.channel, self.file_path, interaction.user.display_name,
-                                                     solicitante_id=interaction.user.id))
+        spawn(traducir_y_entregar(interaction.channel, self.file_path, interaction.user.display_name,
+                                  solicitante_id=interaction.user.id), interaction.channel)
 
 @bot.event
 async def on_ready():
     print(f'Bot connected as {bot.user}')
+    # Carpetas de imágenes que dejó una descarga interrumpida (reinicio, OOM...). Solo las de más
+    # de 6 h: on_ready también salta al reconectar y no debe tocar descargas en curso.
+    from core.utils import limpiar_temporales_huerfanos
+    borradas = await asyncio.to_thread(limpiar_temporales_huerfanos, 6)
+    if borradas:
+        print(f"[INFO] {borradas} carpetas temporales huérfanas borradas")
+
+
+@bot.event
+async def on_command_error(ctx, error):
+    """Errores de uso con un mensaje corto en español; el resto, al log."""
+    if isinstance(error, commands.CommandNotFound):
+        return
+    if isinstance(error, commands.MissingRequiredArgument):
+        await ctx.send(f"Falta un dato: `{error.param.name}`. Uso: `!{ctx.command.qualified_name} "
+                       f"{ctx.command.signature}`")
+        return
+    if isinstance(error, commands.BadArgument):
+        await ctx.send(f"Argumento no válido. Uso: `!{ctx.command.qualified_name} {ctx.command.signature}`")
+        return
+    original = getattr(error, "original", error)
+    print(f"[ERROR] Comando {ctx.command}: {original!r}")
+    traceback.print_exception(type(original), original, original.__traceback__)
+
+
+# Capítulos de una serie que se procesan a la vez (cada uno con su embed). El resto espera
+# su turno sin crear mensajes, para no disparar el límite de Discord (429) con series largas.
+MAX_CAPITULOS_SIMULTANEOS = 2
+
+
+async def _descargar_serie(ctx, capitulos, logger: "DiscordLogAdapter") -> None:
+    cola: asyncio.Queue = asyncio.Queue()
+    for sub_url in capitulos:
+        cola.put_nowait(sub_url)
+
+    async def trabajador():
+        while not logger.cancelado:
+            try:
+                sub_url = cola.get_nowait()
+            except asyncio.QueueEmpty:
+                return
+            try:
+                await ctx.invoke(descargar, url=sub_url)
+            except Exception as e:
+                print(f"[ERROR] Capítulo {sub_url}: {e!r}")
+                try:
+                    await ctx.send(f"[ERROR] Capítulo <{sub_url}>: {e}"[:1900])
+                except discord.errors.HTTPException:
+                    pass
+
+    await asyncio.gather(*(trabajador() for _ in range(min(MAX_CAPITULOS_SIMULTANEOS, len(capitulos)))))
+    if logger.cancelado:
+        logger.fase = f"Serie cancelada: quedaron {cola.qsize()} capítulo(s) sin descargar"
+        await logger._editar(True, quitar_boton=True, color=discord.Color.dark_grey(),
+                             titulo="⏹️ Serie cancelada")
+    else:
+        logger.fase = f"Serie terminada: {len(capitulos)} capítulo(s) procesados"
+        await logger._editar(True, quitar_boton=True, color=discord.Color.blurple(), titulo="📚 Serie")
+
 
 @bot.command(name='descargar')
 async def descargar(ctx, url: str):
@@ -594,10 +726,6 @@ async def descargar(ctx, url: str):
     Downloads a manga from a supported URL.
     Usage: !descargar <url>
     """
-    if not url:
-        await ctx.send("Please provide a URL.")
-        return
-
     # Un número a secas es un código de galería: el mismo número es una obra distinta en nhentai
     # y en Hitomi, así que no se descarga directamente; se enseñan las dos para elegir.
     codigo = busqueda.codigo_de(url)
@@ -637,11 +765,12 @@ async def descargar(ctx, url: str):
             )
 
         if isinstance(result, list):
-            logger.fase = f"Serie con {len(result)} capítulos: se descargan uno a uno"
+            logger.fase = (f"Serie con {len(result)} capítulos: se descargan de "
+                           f"{MAX_CAPITULOS_SIMULTANEOS} en {MAX_CAPITULOS_SIMULTANEOS}")
             await logger._editar(True, color=discord.Color.blurple(), titulo="📚 Serie detectada")
-            for sub_url in result:
-                # Cada capítulo es una solicitud propia (su embed) y respeta el semáforo global
-                bot.loop.create_task(ctx.invoke(descargar, url=sub_url))
+            # Cada capítulo es una solicitud propia (su embed) y respeta el semáforo global;
+            # «Cancelar» en este embed deja de lanzar los capítulos pendientes
+            spawn(_descargar_serie(ctx, result, logger), ctx.channel)
             return
 
         await asyncio.sleep(0.5)
@@ -661,11 +790,16 @@ async def descargar(ctx, url: str):
 
         # Autor y botones «Buscar continuación» / «Más obras del autor» (solo se busca si los pulsas)
         if logger.generated_files and logger.titulo:
-            bot.loop.create_task(ofrecer_continuacion(ctx, logger.titulo, url))
+            spawn(ofrecer_continuacion(ctx, logger.titulo, url))
 
     except Exception as e:
+        # Que el embed no se quede en «Descargando...» con el botón de cancelar
+        try:
+            logger.logs.append(f"[ERROR] {e}")
+            await logger.finalizar(False)
+        except Exception:
+            pass
         await ctx.send(f"Critical error: {e}")
-        import traceback
         traceback.print_exc()
 
 
@@ -768,13 +902,12 @@ class ElegirDescargaView(discord.ui.View):
         self.add_item(menu)
 
     async def _elegido(self, interaction: discord.Interaction):
-        permisos = getattr(interaction.user, "guild_permissions", None)
-        if interaction.user.id != self.ctx.author.id and not (permisos and permisos.manage_messages):
+        if not _permitido(self.ctx, interaction):
             await interaction.response.send_message("Usa tu propio !buscar para descargar.", ephemeral=True)
             return
         r = self.resultados[int(interaction.data["values"][0])]
         await interaction.response.send_message(f"📥 Descargando **{r.titulo[:150]}** de `{r.sitio}`...")
-        bot.loop.create_task(self.ctx.invoke(descargar, url=r.url))
+        spawn(self.ctx.invoke(descargar, url=r.url), self.ctx.channel)
 
 
 def _titulo_para_series(titulo: str) -> str:
@@ -859,18 +992,17 @@ class SeriesView(discord.ui.View):
             return
         await interaction.response.send_message(
             f"🔓 Buscando la versión sin censura de **{busqueda.consulta_de_titulo(self.texto)[:150]}**...")
-        bot.loop.create_task(buscar_sin_censura(self.ctx, self.texto))
+        spawn(buscar_sin_censura(self.ctx, self.texto), self.ctx.channel)
 
     async def _autor(self, interaction: discord.Interaction, autor: str):
         if not self._permitido(interaction):
             await interaction.response.send_message("Usa tu propio !buscar.", ephemeral=True)
             return
         await interaction.response.send_message(f"✍️ Buscando obras de **{autor[:100]}**...")
-        bot.loop.create_task(buscar_obras_autor(self.ctx, autor))
+        spawn(buscar_obras_autor(self.ctx, autor), self.ctx.channel)
 
     def _permitido(self, interaction) -> bool:
-        permisos = getattr(interaction.user, "guild_permissions", None)
-        return interaction.user.id == self.ctx.author.id or bool(permisos and permisos.manage_messages)
+        return _permitido(self.ctx, interaction)
 
     async def _elegido(self, interaction: discord.Interaction):
         if not self._permitido(interaction):
@@ -878,7 +1010,7 @@ class SeriesView(discord.ui.View):
             return
         r = self.mapa[int(interaction.data["values"][0])]
         await interaction.response.send_message(f"📥 Descargando **{r.titulo[:150]}** de `{r.sitio}`...")
-        bot.loop.create_task(self.ctx.invoke(descargar, url=r.url))
+        spawn(self.ctx.invoke(descargar, url=r.url), self.ctx.channel)
 
     async def _ver_todos(self, interaction: discord.Interaction):
         if not self._permitido(interaction):
@@ -910,12 +1042,6 @@ async def enviar_series(destino, ctx, texto: str, series, todos, segundos: float
                  f"de {len(todos)} resultado(s) · {segundos:.1f}s")
     vista = SeriesView(ctx, texto, series[:3], todos, segundos, actual_url)
     return await destino.send(content=contenido[:2000], embeds=embeds, files=archivos, view=vista)
-
-
-def _permitido(ctx, interaction) -> bool:
-    """Solo quien lanzó el comando (o un moderador) usa los botones y menús de su mensaje."""
-    permisos = getattr(interaction.user, "guild_permissions", None)
-    return interaction.user.id == ctx.author.id or bool(permisos and permisos.manage_messages)
 
 
 async def buscar_continuacion(ctx, titulo: str, url: str = ""):
@@ -1015,14 +1141,14 @@ class AccionesObraView(discord.ui.View):
             await interaction.response.send_message("Descarga tú la obra para buscar su continuación.", ephemeral=True)
             return
         await interaction.response.send_message(f"🔎 Buscando la continuación de **{_titulo_para_series(self.titulo)[:150]}**...")
-        bot.loop.create_task(buscar_continuacion(self.ctx, self.titulo, self.url))
+        spawn(buscar_continuacion(self.ctx, self.titulo, self.url), self.ctx.channel)
 
     async def _autor(self, interaction: discord.Interaction):
         if not _permitido(self.ctx, interaction):
             await interaction.response.send_message("Usa tu propio !buscar.", ephemeral=True)
             return
         await interaction.response.send_message(f"✍️ Buscando obras de **{self.autor[:100]}**...")
-        bot.loop.create_task(buscar_obras_autor(self.ctx, self.autor, self.url))
+        spawn(buscar_obras_autor(self.ctx, self.autor, self.url), self.ctx.channel)
 
 
 async def ofrecer_continuacion(ctx, titulo: str, url: str):
@@ -1416,8 +1542,7 @@ class ResultadosPaginadosView(discord.ui.View):
         return contenido[:2000], tarjetas, archivos
 
     def _permitido(self, interaction: discord.Interaction) -> bool:
-        permisos = getattr(interaction.user, "guild_permissions", None)
-        return interaction.user.id == self.ctx.author.id or bool(permisos and permisos.manage_messages)
+        return _permitido(self.ctx, interaction)
 
     async def _ir(self, interaction: discord.Interaction, paso: int):
         if not self._permitido(interaction):
@@ -1441,7 +1566,7 @@ class ResultadosPaginadosView(discord.ui.View):
             bot.loop.create_task(abrir_menu_bunkr(self.ctx, r.url, r.titulo))
             return
         await interaction.response.send_message(f"📥 Descargando **{r.titulo[:150]}** de `{r.sitio}`...")
-        bot.loop.create_task(self.ctx.invoke(descargar, url=r.url))
+        spawn(self.ctx.invoke(descargar, url=r.url), self.ctx.channel)
 
     async def _continuacion(self, interaction: discord.Interaction):
         if not self._permitido(interaction):
@@ -1449,7 +1574,7 @@ class ResultadosPaginadosView(discord.ui.View):
             return
         r = self.resultados[int(interaction.data["values"][0])]
         await interaction.response.send_message(f"🔎 Buscando la continuación de **{_titulo_para_series(r.titulo)[:150]}**...")
-        bot.loop.create_task(buscar_continuacion(self.ctx, r.titulo, r.url))
+        spawn(buscar_continuacion(self.ctx, r.titulo, r.url), self.ctx.channel)
 
     async def _autor(self, interaction: discord.Interaction):
         if not self._permitido(interaction):
@@ -1464,7 +1589,7 @@ class ResultadosPaginadosView(discord.ui.View):
                 await self.ctx.send(f"No encontré el autor de **{r.titulo[:150]}**.")
                 return
             await buscar_obras_autor(self.ctx, autor, r.url)
-        bot.loop.create_task(seguir())
+        spawn(seguir(), self.ctx.channel)
 
     async def _sin_censura(self, interaction: discord.Interaction):
         if not self._permitido(interaction):
@@ -1473,7 +1598,7 @@ class ResultadosPaginadosView(discord.ui.View):
         r = self.resultados[int(interaction.data["values"][0])]
         await interaction.response.send_message(
             f"🔓 Buscando la versión sin censura de **{busqueda.consulta_de_titulo(r.titulo)[:150]}**...")
-        bot.loop.create_task(buscar_sin_censura(self.ctx, r.titulo, r.url))
+        spawn(buscar_sin_censura(self.ctx, r.titulo, r.url), self.ctx.channel)
 
 
 @bot.command(name='traducir')
@@ -1489,18 +1614,30 @@ async def traducir(ctx, *, enlace: Optional[str] = None):  # '*': el nombre pued
     if adjuntos:
         for a in adjuntos:
             carpeta = tempfile.mkdtemp(prefix="adjunto_")
-            ruta = os.path.join(carpeta, os.path.basename(a.filename))
-            await a.save(ruta)
-            bot.loop.create_task(traducir_y_entregar(ctx.channel, ruta, ctx.author.display_name, borrar_al_final=True,
-                                                     solicitante_id=ctx.author.id))
+            ruta = os.path.join(carpeta, os.path.basename(a.filename) or "adjunto.pdf")
+            entregado = False
+            try:
+                await a.save(ruta)
+                # A partir de aquí traducir_y_entregar borra el PDF y la carpeta (borrar_al_final)
+                spawn(traducir_y_entregar(ctx.channel, ruta, ctx.author.display_name, borrar_al_final=True,
+                                          solicitante_id=ctx.author.id), ctx.channel)
+                entregado = True
+            except Exception as e:
+                await ctx.send(f"[ERROR] No se pudo leer el adjunto `{a.filename}`: {e}"[:1900])
+            finally:
+                if not entregado:
+                    shutil.rmtree(carpeta, ignore_errors=True)
         return
 
     if enlace:
         enlace = enlace.strip().strip('"').strip("<>")  # comillas o <enlace> de Discord
-        ruta = _pdf_de_gofile(enlace) if "gofile.io" in enlace else _find_pdf_fast(os.path.basename(enlace))
+        if "gofile.io" in enlace:
+            ruta = _pdf_de_gofile(enlace)
+        else:  # recorre PDF/: fuera del event loop
+            ruta = await asyncio.to_thread(_find_pdf_fast, os.path.basename(enlace))
         if ruta:
-            bot.loop.create_task(traducir_y_entregar(ctx.channel, ruta, ctx.author.display_name,
-                                                     solicitante_id=ctx.author.id))
+            spawn(traducir_y_entregar(ctx.channel, ruta, ctx.author.display_name,
+                                      solicitante_id=ctx.author.id), ctx.channel)
         elif "gofile.io" in enlace:
             await ctx.send("[ERROR] No encuentro en el NAS el PDF de ese enlace. Solo funciona con enlaces "
                            "que subió este bot; si tienes el PDF, adjúntalo o descárgalo de nuevo con !descargar.")

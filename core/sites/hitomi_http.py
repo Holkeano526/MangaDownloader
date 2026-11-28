@@ -224,9 +224,24 @@ async def info_galeria(gid: int, s: aiohttp.ClientSession, reglas: Optional["Reg
             len(archivos))
 
 
+# gg.js para la búsqueda (solo sirve para las portadas): se guarda unos minutos en vez de pedirlo en
+# cada búsqueda y variante. La descarga (resolver) lo sigue pidiendo siempre, porque con unas reglas
+# caducadas las URLs de las páginas darían 404.
+_GG_TTL = 300
+_gg_cache: Tuple[float, Optional[ReglasGG]] = (0.0, None)
+
+
 async def reglas_gg(s: aiohttp.ClientSession) -> Optional["ReglasGG"]:
+    global _gg_cache
+    momento, reglas = _gg_cache
+    if reglas is not None and _time.monotonic() - momento < _GG_TTL:
+        return reglas
     try:
         async with s.get(f"{LTN}/gg.js", headers={"Referer": "https://hitomi.la/"}) as r:
-            return ReglasGG.desde_js(await r.text())
+            if r.status != 200:
+                return reglas  # la anterior (aunque haya caducado) es mejor que nada
+            reglas = ReglasGG.desde_js(await r.text())
+        _gg_cache = (_time.monotonic(), reglas)
+        return reglas
     except Exception:
-        return None
+        return reglas

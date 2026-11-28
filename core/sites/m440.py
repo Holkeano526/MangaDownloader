@@ -4,6 +4,7 @@ M440/Mangas.in site handler.
 """
 import os
 import re
+import sys
 from typing import Callable, Optional
 from crawl4ai import AsyncWebCrawler
 
@@ -80,9 +81,12 @@ class M440Handler(BaseSiteHandler):
                     
                     await self._process_chapter(chap_url, full_pdf_path, crawler, log_callback, check_cancel, None)
                 
-                if config.OPEN_RESULT_ON_FINISH:
-                    try: os.startfile(pdf_dir)
-                    except: pass
+                # os.startfile solo existe en Windows (el bot corre en Linux/Docker)
+                if config.OPEN_RESULT_ON_FINISH and sys.platform == "win32":
+                    try:
+                        os.startfile(pdf_dir)
+                    except OSError:
+                        pass
             else:
                 log_callback("[INFO] Single chapter detected.")
                 # Nombre a partir del enlace (manga y capítulo): con un nombre fijo, dos capítulos
@@ -128,9 +132,13 @@ class M440Handler(BaseSiteHandler):
         # But we delegate to download_and_make_pdf
         
         result = await crawler.arun(url=url, bypass_cache=True)
-        if not result.success: return
+        if not result.success:
+            log_callback(f"[ERROR] No se pudo cargar el capítulo {url}: {result.error_message}")
+            return
         html = result.html
         matches = re.findall(r'data-src=["\'](https://[^"\']+)["\']', html)
+        if not matches:
+            log_callback(f"[ERROR] No se encontraron imágenes en el capítulo {url}")
         if matches:
             images = list(dict.fromkeys(matches))
             log_callback(f"[INFO] Downloading {len(images)} images...")

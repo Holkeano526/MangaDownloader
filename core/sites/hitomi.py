@@ -57,9 +57,6 @@ class HitomiHandler(BaseSiteHandler):
         temp_dir = os.path.join(
             current_dir, config.TEMP_FOLDER_NAME, f"hitomi_{gallery_id}_{unique_id}"
         )
-        if os.path.exists(temp_dir):
-            shutil.rmtree(temp_dir)
-        os.makedirs(temp_dir, exist_ok=True)
 
         download_targets = []
         image_urls = []
@@ -214,31 +211,36 @@ class HitomiHandler(BaseSiteHandler):
                 finally:
                     await browser.close()
 
-        # Step 4: descarga paralela con aiohttp, con el navegador ya cerrado (libera RAM)
-        if image_urls:
-            log_callback(f"[INFO] Images detected: {len(image_urls)}")
-            headers = {"Referer": f"https://hitomi.la/reader/{gallery_id}.html", "User-Agent": config.USER_AGENT}
-            download_targets = await descargar_imagenes(
-                image_urls, temp_dir, headers, log_callback, check_cancel, progress_callback
-            )
-            if check_cancel():
-                # Cancelado: no se genera un PDF a medias
-                log_callback("[INFO] Process cancelled by user.")
-                shutil.rmtree(temp_dir, ignore_errors=True)
-                return
-            log_callback(f"\n[INFO] Download finished. {len(download_targets)} images retrieved.")
-            if len(download_targets) < len(image_urls):
-                log_callback(f"[WARN] {len(image_urls) - len(download_targets)} de {len(image_urls)} páginas no se pudieron descargar.")
+        # La carpeta temporal se crea aquí (no antes del navegador) y el try/finally la borra
+        # aunque algo lance una excepción.
+        os.makedirs(temp_dir, exist_ok=True)
+        try:
+            # Step 4: descarga paralela con aiohttp, con el navegador ya cerrado (libera RAM)
+            if image_urls:
+                log_callback(f"[INFO] Images detected: {len(image_urls)}")
+                headers = {"Referer": f"https://hitomi.la/reader/{gallery_id}.html", "User-Agent": config.USER_AGENT}
+                download_targets = await descargar_imagenes(
+                    image_urls, temp_dir, headers, log_callback, check_cancel, progress_callback
+                )
+                if check_cancel():
+                    # Cancelado: no se genera un PDF a medias
+                    log_callback("[INFO] Process cancelled by user.")
+                    return
+                log_callback(f"\n[INFO] Download finished. {len(download_targets)} images retrieved.")
+                if len(download_targets) < len(image_urls):
+                    log_callback(f"[WARN] {len(image_urls) - len(download_targets)} de {len(image_urls)} páginas no se pudieron descargar.")
 
-        # Generate PDF via async utils (non-blocking)
-        if download_targets:
-            pdf_name = f"{clean_filename(title)}.pdf"
-            await async_finalize_pdf_flow(
-                download_targets,
-                pdf_name,
-                log_callback,
-                temp_dir,
-                open_result=config.OPEN_RESULT_ON_FINISH,
-            )
-        else:
-            log_callback("[ERROR] No images downloaded for PDF.")
+            # Generate PDF via async utils (non-blocking)
+            if download_targets:
+                pdf_name = f"{clean_filename(title)}.pdf"
+                await async_finalize_pdf_flow(
+                    download_targets,
+                    pdf_name,
+                    log_callback,
+                    temp_dir,
+                    open_result=config.OPEN_RESULT_ON_FINISH,
+                )
+            else:
+                log_callback("[ERROR] No images downloaded for PDF.")
+        finally:
+            shutil.rmtree(temp_dir, ignore_errors=True)

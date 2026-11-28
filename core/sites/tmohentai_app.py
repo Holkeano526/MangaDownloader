@@ -4,9 +4,6 @@ TMOHentai (dominio .app) — descarga por HTTP, sin navegador.
   Ficha : https://tmohentai.app/library/<tipo>/<id>/<slug>
   Lector: https://tmohentai.app/view_uploads/<id>
   Páginas: https://storage.tmohentai.app/mangas/<id>/<n>.webp  (todas en el HTML del lector)
-
-El handler antiguo de TMO (tmo.py) usa crawl4ai + Gemini para el dominio .com y no
-entiende las URLs /library/ de .app; este va antes en la lista de handlers.
 """
 import html
 import re
