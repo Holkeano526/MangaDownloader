@@ -80,10 +80,11 @@ async def candidatos(texto: str, artista: Optional[str] = None, con_artista: boo
     """(resultados por texto [∪ obras del artista], artista usado). Sin duplicados de URL.
     Las obras del artista solo se suman con con_artista=True: el usuario las pide aparte con el
     botón «Más obras del autor» (buscar un título concreto no debe traer todo el catálogo)."""
-    por_texto = await busqueda.buscar(texto, limite=50)
+    # Solo sitios de manga: los de creadoras (vídeos) no tienen nada que agrupar aquí
+    por_texto = await busqueda.buscar(texto, limite=50, buscadores=busqueda.BUSCADORES_MANGA)
     artista = artista or artista_probable(por_texto)
     if con_artista and artista and busqueda.normalizar(artista) not in busqueda.normalizar(texto):
-        por_artista = await busqueda.buscar(artista, limite=50)
+        por_artista = await busqueda.buscar(artista, limite=50, buscadores=busqueda.BUSCADORES_MANGA)
     else:
         por_artista = []
     vistos, todos = set(), []

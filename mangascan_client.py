@@ -23,8 +23,14 @@ import aiohttp
 
 MANGASCAN_URL = os.getenv("MANGASCAN_URL", "http://192.168.1.86:8001").rstrip("/")
 
-# Una traducción larga puede durar más de una hora: sin límite total, pero sí de conexión.
-_TIMEOUT_STREAM = aiohttp.ClientTimeout(total=None, sock_connect=15, sock_read=None)
+# Una traducción larga puede durar más de una hora: sin límite total, pero sí de conexión y
+# de silencio: si el stream no manda nada en 5 min se reconecta (ver _MAX_RECONEXIONES).
+_TIMEOUT_STREAM = aiohttp.ClientTimeout(total=None, sock_connect=15, sock_read=300)
+# Reconexiones seguidas sin recibir ninguna línea antes de dar la tarea por perdida (~30 min).
+# Sin este tope, un servidor colgado dejaría el semáforo de traducciones del bot ocupado para siempre.
+_MAX_RECONEXIONES = 6
+# Tope absoluto (por si el servidor repite el log al reconectar pero la tarea no avanza nunca)
+_MAX_RECONEXIONES_TOTAL = 50
 _TIMEOUT_CORTO = aiohttp.ClientTimeout(total=None, sock_connect=15, sock_read=600)
 
 _RE_PROGRESO = re.compile(r"Progreso: (\d+)/(\d+) \| ([\d.]+) s/página")
@@ -59,6 +65,40 @@ async def disponible() -> bool:
         return False
 
 
+def _procesar_linea(bruto: bytes, estado: EstadoTraduccion) -> bool:
+    """Actualiza `estado` con una línea del stream SSE. Devuelve True si hay que avisar al bot."""
+    linea = bruto.decode("utf-8", "replace").strip()
+    if not linea.startswith("data:"):
+        return False
+    linea = linea[5:].strip()
+    avisar = False
+    if m := _RE_COLA.search(linea):
+        estado.cola = int(m.group(1))
+        estado.fase = f"En cola (posición {estado.cola})..."
+        avisar = True
+    elif "Iniciando procesamiento" in linea:
+        estado.fase = "Extrayendo páginas..."
+        avisar = True
+    elif m := _RE_PAGINAS.search(linea):
+        estado.total = int(m.group(1))
+    elif m := _RE_PROGRESO.search(linea):
+        estado.pagina, estado.total = int(m.group(1)), int(m.group(2))
+        estado.seg_por_pagina = float(m.group(3))
+        estado.fase = "Traduciendo..."
+        avisar = True
+    elif "Recomponiendo" in linea:
+        estado.fase = "Generando el PDF..."
+        avisar = True
+    elif "✗" in linea or "[ERROR]" in linea:
+        estado.errores.append(linea[-200:])
+    if m := _RE_FIN.search(linea):
+        estado.codigo_salida = int(m.group(1))
+    elif "cancelado por el usuario" in linea:
+        estado.fase = "Cancelada"
+        estado.codigo_salida = -1
+    return avisar
+
+
 async def traducir_pdf(ruta_pdf: str, carpeta_salida: str, on_estado: Callback) -> tuple[EstadoTraduccion, Optional[str]]:
     """Sube ruta_pdf a MangaScan, espera a que termine y descarga el resultado.
 
@@ -86,47 +126,40 @@ async def traducir_pdf(ruta_pdf: str, carpeta_salida: str, on_estado: Callback) 
         estado.fase = "En cola de MangaScan..."
         await on_estado(estado)
 
-        # 2) Seguir el log en vivo (Server-Sent Events) hasta el final
-        async with s.get(f"{MANGASCAN_URL}/api/stream/{estado.task_id}", timeout=_TIMEOUT_STREAM) as r:
-            async for bruto in r.content:
-                linea = bruto.decode("utf-8", "replace").strip()
-                if not linea.startswith("data:"):
-                    continue
-                linea = linea[5:].strip()
-                if m := _RE_COLA.search(linea):
-                    estado.cola = int(m.group(1))
-                    estado.fase = f"En cola (posición {estado.cola})..."
-                    await on_estado(estado)
-                elif "Iniciando procesamiento" in linea:
-                    estado.fase = "Extrayendo páginas..."
-                    await on_estado(estado)
-                elif m := _RE_PAGINAS.search(linea):
-                    estado.total = int(m.group(1))
-                elif m := _RE_PROGRESO.search(linea):
-                    estado.pagina, estado.total = int(m.group(1)), int(m.group(2))
-                    estado.seg_por_pagina = float(m.group(3))
-                    estado.fase = "Traduciendo..."
-                    await on_estado(estado)
-                elif "Recomponiendo" in linea:
-                    estado.fase = "Generando el PDF..."
-                    await on_estado(estado)
-                elif "✗" in linea or "[ERROR]" in linea:
-                    estado.errores.append(linea[-200:])
-                if m := _RE_FIN.search(linea):
-                    estado.codigo_salida = int(m.group(1))
-                    break
-                if "cancelado por el usuario" in linea:
-                    estado.fase = "Cancelada"
-                    estado.codigo_salida = -1
-                    break
+        # 2) Seguir el log en vivo (Server-Sent Events) hasta el final. Si el stream se queda
+        #    callado (sock_read) o se corta, se vuelve a abrir; el log repetido no estropea nada.
+        silencios = reconexiones = 0
+        while estado.codigo_salida is None:
+            recibido = False
+            try:
+                async with s.get(f"{MANGASCAN_URL}/api/stream/{estado.task_id}", timeout=_TIMEOUT_STREAM) as r:
+                    if r.status != 200:
+                        estado.errores.append(f"MangaScan no da el progreso de la tarea (HTTP {r.status})")
+                        break
+                    async for bruto in r.content:
+                        recibido = True
+                        if _procesar_linea(bruto, estado):
+                            await on_estado(estado)
+                        if estado.codigo_salida is not None:
+                            break
+                # El servidor cerró el stream sin el aviso de fin: como antes, se da por fallida
+                break
+            except (asyncio.TimeoutError, aiohttp.ClientPayloadError, aiohttp.ClientConnectionError) as e:
+                print(f"[WARN] MangaScan stream {estado.task_id}: {e!r}")
+            silencios = 0 if recibido else silencios + 1
+            reconexiones += 1
+            if silencios >= _MAX_RECONEXIONES or reconexiones >= _MAX_RECONEXIONES_TOTAL:
+                estado.errores.append("MangaScan dejó de responder (el progreso de la tarea no avanza)")
+                break
+            await asyncio.sleep(5)
 
         if estado.codigo_salida != 0:
             estado.fase = "Falló" if estado.fase != "Cancelada" else estado.fase
             return estado, None
 
-        # 3) Descargar el PDF traducido
+        # 3) Descargar el PDF traducido (el nombre viene del servidor: sin rutas)
         os.makedirs(carpeta_salida, exist_ok=True)
-        destino = os.path.join(carpeta_salida, f"traducido_{nombre_servidor}")
+        destino = os.path.join(carpeta_salida, f"traducido_{os.path.basename(nombre_servidor) or 'manga.pdf'}")
         params = {"filename": nombre_servidor}
         async with s.get(f"{MANGASCAN_URL}/api/download/{estado.task_id}", params=params) as r:
             if r.status != 200 or r.content_type != "application/pdf":

@@ -1,6 +1,6 @@
 # Añadir un sitio a MangaDownloader
 
-Cada sitio es una clase aislada en `core/sites/` (patrón Strategy). Bot, web y escritorio la usan sin cambios.
+Cada sitio es una clase aislada en `core/sites/` (patrón Strategy). El bot de Discord la usa sin cambios.
 
 ## 1. Descarga
 
@@ -71,18 +71,23 @@ En `core/busqueda.py`:
 
 1. Escribe `async def _nuevositio(s, q)` que devuelva tuplas `(sitio, título, url, portada)`.
    `_enlaces(html, base, patron_url)` extrae las tarjetas de una página de resultados típica.
-2. Añádela a `BUSCADORES`.
+   Pide las páginas con `_get(s, url)`: respeta el tope global de peticiones simultáneas (`_SEM_HTTP`).
+   Opcional, un 5.º elemento con el idioma del resultado tal como lo da el sitio, en inglés y en minúsculas
+   (`"spanish"`, `"english"`, `"japanese"`...: las claves de `_IDIOMA_HITOMI`), p. ej.
+   `(sitio, título, url, portada, "spanish")`. `buscar()` lo pasa a `idioma_de()` como pista y manda sobre
+   lo que diga el título; si el valor no está en `_IDIOMA_HITOMI` se ignora. Lo usan Hitomi y SexKomix2.
+2. Añádela a `BUSCADORES_MANGA` (no a `BUSCADORES`, que es la suma de las dos listas y se calcula sola).
 3. Si el sitio tiene un solo idioma, añádelo a `_IDIOMA_SITIO`. Si sus resultados son fiables aunque el título
    no coincida (también busca por artista o etiqueta), añádelo a `ESTRICTOS`.
-4. Si es un sitio de creadoras (catálogo grande, búsqueda por nombre/etiqueta), añádelo también a
-   `BUSCADORES_CREADORAS` y a `CREADORAS`: lo usa `!leak` (no `!buscar`), con una puntuación mínima y un
-   tope por sitio para que no tape a los demás.
+4. Si es un sitio de creadoras (catálogo grande, búsqueda por nombre/etiqueta), añádelo a
+   `BUSCADORES_CREADORAS` (en vez de `BUSCADORES_MANGA`) y a `CREADORAS`: lo usa `!leak` (no `!buscar`), con
+   una puntuación mínima y un tope por sitio para que no tape a los demás.
 
 ## 3. Probar
 
 ```bash
-python -c "from core.handler import HANDLERS; print([h.__name__ for h in HANDLERS])"
-python -c "import asyncio; from core import busqueda; print(asyncio.run(busqueda.buscar('texto'))[:3])"
+python -c "from core.handler import HANDLERS; print([type(h).__name__ for h in HANDLERS])"
+python -c "import asyncio; from core import busqueda; print(asyncio.run(busqueda.buscar('texto', buscadores=busqueda.BUSCADORES_MANGA))[:3])"
 ```
 
 Y una descarga real con `!descargar <url>`.

@@ -49,6 +49,18 @@ from .sites.tubos import TUBOS as _TUBOS
 from .sites.wpvideos import WORDPRESS as _WORDPRESS, posts_de as _wp_posts
 
 TIMEOUT = aiohttp.ClientTimeout(total=20, connect=8)
+# Peticiones HTTP simultáneas de TODAS las búsquedas en curso. Cada búsqueda lanza ~14 sitios x 3
+# variantes (y Hitomi 20 fichas más): sin tope, varias a la vez abrían cientos de conexiones.
+_SEM_HTTP = asyncio.Semaphore(16)
+
+
+def _aviso(sitio: str, e: BaseException) -> None:
+    """Una línea en la consola cuando falla un sitio (antes se tragaba sin dejar rastro)."""
+    print(f"[WARN] [busqueda] {sitio}: {type(e).__name__}: {str(e)[:200]}")
+
+
+def _nombre(f) -> str:
+    return getattr(f, "__name__", "?").lstrip("_")
 
 
 @dataclass
@@ -170,10 +182,11 @@ def _enlaces(pagina: str, base: str, patron: str) -> List[Tuple[str, str, str]]:
 
 # ─── Buscadores por sitio ────────────────────────────────────────────────────
 async def _get(s: aiohttp.ClientSession, url: str, **kw) -> str:
-    async with s.get(url, **kw) as r:
-        if r.status != 200:
-            return ""
-        return await r.text(errors="replace")
+    async with _SEM_HTTP:
+        async with s.get(url, **kw) as r:
+            if r.status != 200:
+                return ""
+            return await r.text(errors="replace")
 
 
 async def _hentainexus(s, q):
@@ -199,17 +212,19 @@ async def _nhentai_website(s, q):
 async def _hitomi(s, q):
     """Hitomi: índices binarios (ver core/sites/hitomi_http.py). Datos de las 20 más recientes."""
     from .sites import hitomi_http
-    ids = (await hitomi_http.buscar_ids(q, s))[:20]
+    async with _SEM_HTTP:
+        ids = (await hitomi_http.buscar_ids(q, s))[:20]
     if not ids:
         return []
-    reglas = await hitomi_http.reglas_gg(s)
+    reglas = await hitomi_http.reglas_gg(s)  # en caché unos minutos (ver hitomi_http)
     sem = asyncio.Semaphore(8)
 
     async def una(gid):
-        async with sem:
+        async with sem, _SEM_HTTP:
             try:
                 return await hitomi_http.info_galeria(gid, s, reglas)
-            except Exception:
+            except Exception as e:
+                _aviso(f"hitomi (galería {gid})", e)
                 return None
     infos = await asyncio.gather(*(una(g) for g in ids))
     return [("hitomi", t, u, img, idioma) for t, u, img, _, idioma, _ in (i for i in infos if i)]
@@ -381,7 +396,8 @@ BUSCADORES_MANGA = [_hitomi, _hentainexus, _nhentai_to, _nhentai_xxx, _nhentai_w
                     _hentalk, _tmohentai, _lectorhentai, _imhentai, _allporncomic, _sexkomix2]
 BUSCADORES_CREADORAS = [_erome, _bunkr, _notfans, _fapsly] + \
     [_buscador_tubo(c) for c in _TUBOS] + [_buscador_wp(c) for c in _WORDPRESS]
-# Todos. El bot usa las dos listas por separado (!buscar y !leak); la web y el agrupador, esta.
+# Todos (valor por defecto de buscar()). El bot y el agrupador usan las dos listas por separado
+# (!buscar y !leak).
 BUSCADORES = BUSCADORES_MANGA + BUSCADORES_CREADORAS
 
 
@@ -433,7 +449,8 @@ async def buscar(texto: str, minimo: float = 0.6, limite: int = 25,
         async def seguro(f, q):
             try:
                 return await f(s, q)
-            except Exception:
+            except Exception as e:
+                _aviso(_nombre(f), e)
                 return []
         listas = await asyncio.gather(*(seguro(f, q) for f in buscadores for q in variantes))
     resultados, urls, por_sitio = [], set(), {}
@@ -498,7 +515,7 @@ def codigo_de(texto: str) -> Optional[int]:
 
 async def _codigo_nhentai(s: aiohttp.ClientSession, gid: int) -> Optional[Resultado]:
     url = f"https://nhentai.to/g/{gid}"
-    async with s.get(url, headers={"Referer": "https://nhentai.to/"}) as r:
+    async with _SEM_HTTP, s.get(url, headers={"Referer": "https://nhentai.to/"}) as r:
         if r.status != 200:
             return None  # 404: no existe (o el mirror está caído)
         p = await r.text(errors="replace")
@@ -539,7 +556,8 @@ async def buscar_codigo(gid: int) -> List[Resultado]:
         async def seguro(f):
             try:
                 return await f(s, gid)
-            except Exception:
+            except Exception as e:
+                _aviso(_nombre(f), e)
                 return None
         res = await asyncio.gather(seguro(_codigo_nhentai), seguro(_codigo_hitomi))
     return [r for r in res if r]
@@ -596,20 +614,24 @@ async def version_sin_censura(titulo: str, url_actual: str = "", limite: int = 5
 
 
 # ─── Idioma ──────────────────────────────────────────────────────────────────
-_IDIOMAS_TITULO = [  # (código, patrón en el título); el primero que aparezca manda
-    ("es", r"espa[ñn]ol|spanish|castellano|spa|esp"),
-    ("en", r"english|eng"),
-    ("zh", r"chinese|中文|汉化|漢化|中国翻訳|中國翻譯"),
-    ("ko", r"korean|한국어|kor"),
-    ("vi", r"vietnamese|ti[ếe]ng vi[ệe]t"),
-    ("ru", r"russian|русский"),
-    ("pt", r"portugu[eê]s|portuguese|pt-?br"),
-    ("fr", r"fran[cç]ais|french"),
-    ("id", r"indonesian|bahasa"),
-    ("th", r"thai"),
-    ("de", r"german|deutsch"),
-    ("it", r"italian|italiano"),
-    ("ja", r"japanese|日本語|raw"),
+# (código, nombre completo, abreviatura o None). El nombre completo vale en todo el título; la
+# abreviatura solo dentro de [corchetes] o (paréntesis). Antes no había \b y se miraba el título
+# entero: "Spanking" y "Despair" salían en español, "Revenge" en inglés, "Raw Desire" en japonés.
+# Los marcadores CJK no llevan \b (no separa ideogramas seguidos: "汉化组").
+_IDIOMAS_TITULO = [
+    ("es", r"\b(?:espa[ñn]ol|spanish|castellano)\b", r"\b(?:spa|esp)\b"),
+    ("en", r"\benglish\b", r"\beng\b"),
+    ("zh", r"\bchinese\b|中文|汉化|漢化|中国翻訳|中國翻譯", None),
+    ("ko", r"\bkorean\b|한국어", r"\bkor\b"),
+    ("vi", r"\b(?:vietnamese|ti[ếe]ng vi[ệe]t)\b", None),
+    ("ru", r"\brussian\b|русский", None),
+    ("pt", r"\b(?:portugu[eê]s|portuguese|pt-?br)\b", None),
+    ("fr", r"\b(?:fran[cç]ais|french)\b", None),
+    ("id", r"\b(?:indonesian|bahasa)\b", None),
+    ("th", r"\bthai\b", None),
+    ("de", r"\b(?:german|deutsch)\b", None),
+    ("it", r"\b(?:italian|italiano)\b", None),
+    ("ja", r"\bjapanese\b|日本語", r"\braw\b"),
 ]
 _IDIOMA_HITOMI = {"spanish": "es", "english": "en", "japanese": "ja", "chinese": "zh", "korean": "ko",
                   "vietnamese": "vi", "russian": "ru", "portuguese": "pt", "french": "fr", "indonesian": "id",
@@ -631,10 +653,15 @@ def idioma_de(titulo: str, sitio: str, pista: str = "") -> Optional[str]:
     Un título solo con kana/kanji y sin etiqueta se toma como japonés."""
     if pista and pista.lower() in _IDIOMA_HITOMI:
         return _IDIOMA_HITOMI[pista.lower()]
-    # Las etiquetas de idioma van entre corchetes o paréntesis; si no hay, se mira el título entero
-    etiquetas = " ".join(re.findall(r"[\[(]([^\])]+)[\])]", titulo or "")) or (titulo or "")
-    for codigo, patron in _IDIOMAS_TITULO:
-        if re.search(patron, etiquetas, re.I) or re.search(patron, titulo or "", re.I):
+    # Primero las etiquetas entre corchetes/paréntesis (nombre o abreviatura); si no dicen nada,
+    # el nombre completo del idioma en cualquier parte del título.
+    t = titulo or ""
+    etiquetas = " ".join(re.findall(r"[\[(]([^\])]+)[\])]", t))
+    for codigo, nombre, abreviatura in _IDIOMAS_TITULO:
+        if re.search(nombre, etiquetas, re.I) or (abreviatura and re.search(abreviatura, etiquetas, re.I)):
+            return codigo
+    for codigo, nombre, _ in _IDIOMAS_TITULO:
+        if re.search(nombre, t, re.I):
             return codigo
     if sitio in _IDIOMA_SITIO:
         return _IDIOMA_SITIO[sitio]
@@ -710,16 +737,16 @@ async def autor(url: str, titulo: str = "") -> Optional[str]:
                 if artistas:
                     return ", ".join(artistas[:3])
                 titulo = titulo or info.get("title", "")
-            except Exception:
-                pass
+            except Exception as e:
+                _aviso("autor hitomi", e)
     else:
         try:
             async with aiohttp.ClientSession(headers={"User-Agent": config.USER_AGENT}, timeout=TIMEOUT) as s:
                 a = _autor_en_pagina(url, await _get(s, url))
             if a:
                 return a
-        except Exception:
-            pass
+        except Exception as e:
+            _aviso(f"autor {urlparse(url).netloc}", e)
     return autor_desde_titulo(titulo)
 
 

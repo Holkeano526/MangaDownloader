@@ -14,6 +14,8 @@ import uuid
 from typing import List, Optional, Callable
 import json
 import threading
+import time
+from io import BytesIO
 
 from .config import (PDF_FOLDER_NAME, TEMP_FOLDER_NAME, MEDIA_FOLDER_NAME, CONCURRENCIA_IMAGENES,
                      REINTENTOS_IMAGEN, JPEG_CALIDAD)
@@ -91,12 +93,17 @@ async def download_image(session: aiohttp.ClientSession, url: str, folder: str, 
             async with session.get(url, headers=headers) as resp:
                 if resp.status == 200:
                     content = await resp.read()
-                    await asyncio.to_thread(_escribir, filepath, content)
-                    return filepath
-                if resp.status in (403, 404, 410):
+                    if await _es_imagen(resp.headers.get("Content-Type", ""), content):
+                        await asyncio.to_thread(_escribir, filepath, content)
+                        return filepath
+                    # Una página HTML (Cloudflare, error) con 200 acababa dentro del PDF y
+                    # rompía img2pdf: se trata como fallo reintentable.
+                    motivo = f"not an image ({resp.headers.get('Content-Type', '?')}, {len(content)} bytes)"
+                elif resp.status in (403, 404, 410):
                     log_callback(f"[ERROR] Failed to download image {index}: Status {resp.status}")
                     return None
-                motivo = f"Status {resp.status}"
+                else:
+                    motivo = f"Status {resp.status}"
         except (aiohttp.ClientError, asyncio.TimeoutError) as e:
             motivo = type(e).__name__
         if intento < REINTENTOS_IMAGEN:
@@ -104,6 +111,59 @@ async def download_image(session: aiohttp.ClientSession, url: str, folder: str, 
             await asyncio.sleep(1.5 * intento)
     log_callback(f"[ERROR] Failed to download image {index} after {REINTENTOS_IMAGEN} attempts ({motivo})")
     return None
+
+
+# Firmas de los formatos que sirven los sitios (JPEG, PNG, GIF, BMP, WebP, AVIF/HEIC).
+_FIRMAS_IMAGEN = (b"\xff\xd8\xff", b"\x89PNG\r\n\x1a\n", b"GIF87a", b"GIF89a", b"BM")
+
+
+def _verificar_con_pillow(datos: bytes) -> bool:
+    try:
+        from PIL import Image
+        with Image.open(BytesIO(datos)) as img:
+            img.verify()
+        return True
+    except Exception:
+        return False
+
+
+async def _es_imagen(content_type: str, datos: bytes) -> bool:
+    """Comprobación barata de que la respuesta es una imagen (no una página de error)."""
+    if not datos:
+        return False
+    tipo = content_type.split(";")[0].strip().lower()
+    if tipo.startswith("text/") or tipo in ("application/json", "application/xhtml+xml"):
+        return False
+    if datos.startswith(_FIRMAS_IMAGEN):
+        return True
+    if datos[:4] == b"RIFF" and datos[8:12] == b"WEBP":
+        return True
+    if datos[4:8] == b"ftyp":  # AVIF/HEIF
+        return True
+    # Formato raro: que decida Pillow (en un hilo, no bloquea el bucle)
+    return await asyncio.to_thread(_verificar_con_pillow, datos)
+
+
+def limpiar_temporales_huerfanos(max_horas: float = 6) -> int:
+    """Borra subcarpetas de la carpeta temporal con más de `max_horas` sin modificar.
+
+    Quedan si el proceso muere a mitad de una descarga (reinicio, OOM). Pensado para llamarse
+    al arrancar el bot. Devuelve cuántas carpetas se borraron.
+    """
+    raiz = os.path.join(os.getcwd(), TEMP_FOLDER_NAME)
+    if not os.path.isdir(raiz):
+        return 0
+    limite = time.time() - max_horas * 3600
+    borradas = 0
+    for nombre in os.listdir(raiz):
+        ruta = os.path.join(raiz, nombre)
+        try:
+            if os.path.isdir(ruta) and os.path.getmtime(ruta) < limite:
+                shutil.rmtree(ruta, ignore_errors=True)
+                borradas += 1
+        except OSError:
+            pass
+    return borradas
 
 
 def _escribir(ruta: str, datos: bytes) -> None:
@@ -398,31 +458,33 @@ async def download_and_make_pdf(image_urls: List[str], output_name: str, headers
     # Clean/Create temp folder
     if os.path.exists(temp_folder): shutil.rmtree(temp_folder)
     os.makedirs(temp_folder, exist_ok=True)
-    
-    files = await descargar_imagenes(image_urls, temp_folder, headers, log_callback, check_cancel, progress_callback)
-    if check_cancel and check_cancel():
-        # Cancelado: no se genera un PDF a medias
-        log_callback("[INFO] Process cancelled by user.")
-        shutil.rmtree(temp_folder, ignore_errors=True)
-        return
-    if len(files) < len(image_urls):
-        log_callback(f"[WARN] {len(image_urls) - len(files)} de {len(image_urls)} páginas no se pudieron descargar.")
 
-    # Sin files.sort(): descargar_imagenes ya devuelve las páginas en orden, y ordenar por texto
-    # ponía "1000.jpg" antes que "101.jpg" en galerías de más de 999 páginas.
-    if files:
-        if is_path:
-            # Special case where output_name is a full path (e.g. m440 chapter)
-            salida = _reservar_salida(output_name)
-            try:
-                success = await asyncio.to_thread(create_pdf, files, salida, log_callback)
-            finally:
-                _liberar_salida(salida)
-        else:
-            await async_finalize_pdf_flow(files, output_name, log_callback, temp_folder, open_result=open_result)
+    # try/finally: si algo lanza una excepción (red, disco, cancelación de la tarea) la carpeta
+    # temporal no se queda huérfana.
+    try:
+        files = await descargar_imagenes(image_urls, temp_folder, headers, log_callback, check_cancel, progress_callback)
+        if check_cancel and check_cancel():
+            # Cancelado: no se genera un PDF a medias
+            log_callback("[INFO] Process cancelled by user.")
             return
+        if len(files) < len(image_urls):
+            log_callback(f"[WARN] {len(image_urls) - len(files)} de {len(image_urls)} páginas no se pudieron descargar.")
 
-    if os.path.exists(temp_folder): shutil.rmtree(temp_folder)
-    
-    if not is_path:
-        log_callback("[DONE] Finished.")
+        # Sin files.sort(): descargar_imagenes ya devuelve las páginas en orden, y ordenar por texto
+        # ponía "1000.jpg" antes que "101.jpg" en galerías de más de 999 páginas.
+        if files:
+            if is_path:
+                # Special case where output_name is a full path (e.g. m440 chapter)
+                salida = _reservar_salida(output_name)
+                try:
+                    await asyncio.to_thread(create_pdf, files, salida, log_callback)
+                finally:
+                    _liberar_salida(salida)
+            else:
+                await async_finalize_pdf_flow(files, output_name, log_callback, temp_folder, open_result=open_result)
+                return
+
+        if not is_path:
+            log_callback("[DONE] Finished.")
+    finally:
+        shutil.rmtree(temp_folder, ignore_errors=True)

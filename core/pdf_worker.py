@@ -50,7 +50,13 @@ def preparar_para_pdf(path: str, calidad: int = 70) -> str:
 
 def generar_pdf(image_paths: List[str], output_pdf: str, log: Callable[[str], None],
                 calidad: int = 70, hilos: int = 1) -> bool:
-    """Convierte lo que haga falta y escribe el PDF con img2pdf (o Pillow si img2pdf falla)."""
+    """Convierte lo que haga falta y escribe el PDF con img2pdf (o Pillow si img2pdf falla).
+
+    Se escribe en `<output_pdf>.part` y se renombra al terminar: si falla a mitad no queda
+    un PDF corrupto con el nombre final.
+    """
+    parcial = output_pdf + ".part"
+    final_paths = list(image_paths)
     try:
         # Decodificar WebP/AVIF es lo caro: en paralelo (Pillow libera el GIL al decodificar)
         with ThreadPoolExecutor(max_workers=max(1, hilos)) as ex:
@@ -60,28 +66,43 @@ def generar_pdf(image_paths: List[str], output_pdf: str, log: Callable[[str], No
         # outputstream: escribe al archivo según genera. Sin él, img2pdf devuelve el PDF
         # entero como bytes y el pico es ~3 veces el tamaño del PDF (medido: 1159 MB para
         # un PDF de 387 MB, frente a 430 MB así).
-        with open(output_pdf, "wb") as f:
+        with open(parcial, "wb") as f:
             img2pdf.convert(final_paths, rotation=img2pdf.Rotation.ifvalid, outputstream=f)
+        os.replace(parcial, output_pdf)
         return True
     except Exception as e:
         log(f"[ERROR] Failed to save PDF (img2pdf): {e}")
         try:
             log("[INFO] Trying alternative method (Pillow)...")
-            images = []
-            for path in image_paths:
-                try:
-                    with Image.open(path) as img:
-                        if img.mode in ("RGBA", "P"):
-                            img = img.convert("RGB")
-                        images.append(img.copy())
-                except Exception:
-                    pass
-            if images:
-                images[0].save(output_pdf, "PDF", resolution=100.0, save_all=True, append_images=images[1:])
+            if _pdf_con_pillow(final_paths, parcial):
+                os.replace(parcial, output_pdf)
                 return True
         except Exception as e2:
             log(f"[ERROR] Alternative method failed: {e2}")
         return False
+    finally:
+        if os.path.exists(parcial):
+            try:
+                os.remove(parcial)
+            except OSError:
+                pass
+
+
+def _pdf_con_pillow(paths: List[str], salida: str) -> bool:
+    """PDF página a página (save con append=True): solo hay una imagen decodificada en memoria
+    a la vez, en vez de todas (cientos de MB en galerías grandes). Las ilegibles se omiten."""
+    primera = True
+    for path in paths:
+        try:
+            img = Image.open(path)
+            img.load()
+        except Exception:
+            continue
+        with img:
+            pagina = img.convert("RGB") if img.mode in ("RGBA", "LA", "P") else img
+            pagina.save(salida, "PDF", resolution=100.0, append=not primera)
+        primera = False
+    return not primera
 
 
 def _main() -> int:

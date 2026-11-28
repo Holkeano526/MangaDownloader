@@ -82,7 +82,7 @@ class NHentaiMirrorHandler(BaseSiteHandler):
         except ErrorMirror as e:
             log_callback(f"[ERROR] {e}")
             return
-        except aiohttp.ClientError as e:
+        except (aiohttp.ClientError, asyncio.TimeoutError) as e:
             log_callback(f"[ERROR] No se pudo conectar con {p.netloc}: {e}")
             return
 
@@ -166,7 +166,7 @@ class NHentaiMirrorHandler(BaseSiteHandler):
                         # 3hentai responde "200 image/png" con 0 bytes para páginas que NO existen
                         largo = r.headers.get("Content-Length")
                         return largo is None or int(largo) > 0
-                except aiohttp.ClientError:
+                except (aiohttp.ClientError, asyncio.TimeoutError):
                     return False
 
         def preferida(n: int) -> str:
