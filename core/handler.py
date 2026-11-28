@@ -69,31 +69,53 @@ async def process_entry(
     Returns:
         None: Side-effect function that drives the download processing.
     """
-    try:
-        parsed_url = urlparse(url)
-        hostname = parsed_url.netloc.lower()
-    except Exception:
-        log_callback("[ERROR] Invalid URL provided.")
+    hostname = host_de_url(url)
+    if not hostname:
+        log_callback("[ERROR] Invalid URL provided (solo se admiten enlaces http/https a un dominio).")
         return
 
     for handler in HANDLERS:
-        # [SEGURIDAD - OPEN SOURCE] 
-        # Prevención de Server-Side Request Forgery (SSRF).
-        # Validamos que el dominio base (ej. 'tmohentai') exista genuinamente dentro del 'hostname' extraído,
-        # en lugar de hacer un simple 'domain in url' que permitiría a un atacante inyectar URLs internas
-        # como: `http://localhost:8000/api/admin?fake=tmohentai`.
-        # Esto asegura que la petición HTTP que hace el servidor web vaya dirigida exclusivamente 
-        # a los dominios oficiales de manga soportados.
-        supported = handler.get_supported_domains()
-        if any(domain in hostname for domain in handler.get_supported_domains()):
+        # Prevención de SSRF: se compara el hostname real (urlparse().hostname, sin usuario ni puerto)
+        # por dominio completo o subdominio. Antes se buscaba el texto en netloc, y
+        # "https://sexkomix2.com@192.168.1.1/" o "nhentai.10.0.0.5.nip.io" pasaban el filtro.
+        if any(dominio_coincide(hostname, d) for d in handler.get_supported_domains()):
             return await handler.process(url, log_callback, check_cancel, progress_callback)
 
-    if any(d in hostname for d in BLOQUEADOS_CLOUDFLARE):
+    if any(dominio_coincide(hostname, d) for d in BLOQUEADOS_CLOUDFLARE):
         log_callback(f"[ERROR] {hostname} está protegido por Cloudflare (desafío anti-bots en todas sus páginas) "
                      f"y no se puede descargar automáticamente. Busca la obra con !buscar en los sitios compatibles.")
         # (En Discord, !descargar ya busca la obra por su título antes de llegar aquí.)
         return
     log_callback("[ERROR] Unsupported website.")
+
+
+def host_de_url(url: str) -> Optional[str]:
+    """Hostname en minúsculas de una URL http(s), sin usuario, contraseña ni puerto.
+    None si la URL no es http/https, no tiene host o el host es una IP literal."""
+    import ipaddress
+    try:
+        p = urlparse(url.strip())
+        host = (p.hostname or "").rstrip(".").lower()
+    except ValueError:
+        return None
+    if p.scheme not in ("http", "https") or not host:
+        return None
+    try:
+        ipaddress.ip_address(host)
+        return None  # nunca una IP: ningún sitio soportado se sirve así
+    except ValueError:
+        return host
+
+
+def dominio_coincide(host: str, dominio: str) -> bool:
+    """True si `host` es `dominio` o un subdominio suyo ("www.hitomi.la" con "hitomi.la").
+    Un dominio sin punto ("nhentai", "hentai2read") es un nombre de sitio con varios TLD: debe ser
+    la etiqueta registrable del host ("nhentai.to", "www.nhentai.xxx"), no cualquier parte."""
+    dominio = dominio.lower().strip(".")
+    if "." in dominio:
+        return host == dominio or host.endswith("." + dominio)
+    etiquetas = host.split(".")
+    return len(etiquetas) >= 2 and etiquetas[-2] == dominio
 
 
 # Sitios pedidos que responden con el desafío de Cloudflare ("Just a moment", 403) incluso en
@@ -121,8 +143,8 @@ def obra_desde_enlace(url: str) -> Optional[tuple]:
         p = urlparse(url)
     except ValueError:
         return None
-    host = p.netloc.lower().split(":")[0]
-    sitio = next((d for d in BLOQUEADOS_CLOUDFLARE if host == d or host.endswith("." + d)), None)
+    host = (p.hostname or "").lower()
+    sitio = next((d for d in BLOQUEADOS_CLOUDFLARE if dominio_coincide(host, d)), None)
     if not sitio:
         return None
     segmentos = [s for s in unquote(p.path).split("/") if s]

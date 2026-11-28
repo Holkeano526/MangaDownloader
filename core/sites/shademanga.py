@@ -1,6 +1,7 @@
 """
 ShadeManga site handler.
 """
+import asyncio
 import os
 import re
 import shutil
@@ -10,7 +11,12 @@ from playwright.async_api import async_playwright
 
 from .base import BaseSiteHandler
 from .. import config
-from ..utils import finalize_pdf_flow, clean_filename
+from ..utils import async_finalize_pdf_flow, clean_filename
+
+
+def _escribir(ruta: str, datos: bytes) -> None:
+    with open(ruta, "wb") as f:
+        f.write(datos)
 
 
 class ShadeMangaHandler(BaseSiteHandler):
@@ -144,8 +150,7 @@ class ShadeMangaHandler(BaseSiteHandler):
                             filename = f"{i:03d}.{ext}"
                             filepath = os.path.join(temp_dir, filename)
                             
-                            with open(filepath, 'wb') as f:
-                                f.write(data)
+                            await asyncio.to_thread(_escribir, filepath, data)
                             
                             download_targets.append(filepath)
                             
@@ -166,9 +171,14 @@ class ShadeMangaHandler(BaseSiteHandler):
             finally:
                 await browser.close()
 
+        if check_cancel():
+            # Cancelado a mitad: no se entrega un PDF parcial.
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            return
         if download_targets:
             pdf_name = f"{clean_filename(title)}.pdf"
-            finalize_pdf_flow(
+            # Asíncrono: create_pdf corre en un hilo y no congela el bot mientras arma el PDF.
+            await async_finalize_pdf_flow(
                 download_targets, 
                 pdf_name, 
                 log_callback, 
