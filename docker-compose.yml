@@ -1,34 +1,8 @@
 version: '3.8'
 
 services:
-  backend:
-    build: .
-    container_name: manga_backend
-    ports:
-      - "8000:8000"
-    volumes:
-      - ./PDF:/app/PDF
-      - ./Media:/app/Media
-      - ./.env:/app/.env
-    restart: unless-stopped
-    environment:
-      - HEADLESS=true
-    command: python web_server.py
-
-  frontend:
-    build:
-      context: ./web_client_next
-      dockerfile: Dockerfile
-    container_name: manga_frontend
-    ports:
-      - "3000:3000" # Next.js exposed on port 3000
-    depends_on:
-      - backend
-    restart: unless-stopped
-    environment:
-      - NODE_ENV=production
-
   discord_bot:
+    # En el NAS se usa la receta OMV "manga-downloader" (Dockerfile.bot sobre la base congelada).
     build: .
     container_name: manga_discord_bot
     volumes:
