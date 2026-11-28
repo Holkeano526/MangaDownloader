@@ -85,7 +85,9 @@ class M440Handler(BaseSiteHandler):
                     except: pass
             else:
                 log_callback("[INFO] Single chapter detected.")
-                pdf_name = "m440_chapter.pdf"
+                # Nombre a partir del enlace (manga y capítulo): con un nombre fijo, dos capítulos
+                # sueltos a la vez escribían el mismo PDF.
+                pdf_name = f"m440_{clean_filename('_'.join(url.rstrip('/').split('/')[-2:]))}.pdf"
                 
                 # Single chapter output
                 await self._process_chapter(

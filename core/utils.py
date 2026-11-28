@@ -13,26 +13,65 @@ import sys
 import uuid
 from typing import List, Optional, Callable
 import json
+import threading
 
 from .config import (PDF_FOLDER_NAME, TEMP_FOLDER_NAME, MEDIA_FOLDER_NAME, CONCURRENCIA_IMAGENES,
                      REINTENTOS_IMAGEN, JPEG_CALIDAD)
 from .pdf_worker import preparar_para_pdf as _preparar_para_pdf, generar_pdf as _generar_pdf
 
+# Máximo de bytes UTF-8 para la parte del nombre que sale del título. ext4 admite 255 bytes por
+# nombre; se deja margen para sufijos (" (2)", "_<uuid>", " - capítulo") y la extensión.
+MAX_BYTES_NOMBRE = 150
+
+
 def clean_filename(text: str) -> str:
     """
     Sanitizes the string to create a valid Windows/Linux file or directory name.
-    Strips HTML tags and removes reserved characters (backslash, / * ? : " < > |).
-    
-    Args:
-        text (str): The raw title string to be sanitized.
-        
+    Strips HTML tags, reserved characters (backslash, / * ? : " < > |) and control characters,
+    and truncates to MAX_BYTES_NOMBRE bytes of UTF-8 (a 90-character Japanese title is ~270 bytes,
+    over the 255-byte limit of ext4, and os.makedirs/open failed with ENAMETOOLONG).
+
     Returns:
         str: A safe file name string. Defaults to 'untitled' if empty.
     """
     if not text: return "untitled"
     text = re.sub(r'<[^>]+>', '', text)
-    safe = re.sub(r'[\\/*?:"<>|]', "", text).strip()
+    safe = re.sub(r'[\\/*?:"<>|\x00-\x1f\x7f]', "", text).strip()
+    datos = safe.encode("utf-8")
+    if len(datos) > MAX_BYTES_NOMBRE:
+        safe = datos[:MAX_BYTES_NOMBRE].decode("utf-8", "ignore")
+    safe = safe.rstrip(" .")  # Windows no admite nombres que acaben en punto o espacio
     return safe if safe else "untitled"
+
+
+# Nombres de PDF que se están generando ahora mismo. Dos descargas simultáneas con el mismo título
+# (o dos capítulos sueltos de M440) escribían el mismo archivo: uno pisaba o borraba al otro.
+_SALIDAS_EN_USO: set = set()
+_SALIDAS_LOCK = threading.Lock()
+
+
+def _reservar_salida(ruta: str) -> str:
+    """Devuelve una ruta de salida que ninguna otra descarga en curso esté usando ("x.pdf",
+    "x (2).pdf"...) y la marca como en uso. Liberarla con _liberar_salida."""
+    base, ext = os.path.splitext(ruta)
+    with _SALIDAS_LOCK:
+        candidata, n = ruta, 1
+        while os.path.normcase(candidata) in _SALIDAS_EN_USO:
+            n += 1
+            candidata = f"{base} ({n}){ext}"
+        _SALIDAS_EN_USO.add(os.path.normcase(candidata))
+        return candidata
+
+
+def _liberar_salida(ruta: str) -> None:
+    with _SALIDAS_LOCK:
+        _SALIDAS_EN_USO.discard(os.path.normcase(ruta))
+
+
+def _nombre_pdf_seguro(pdf_name: str) -> str:
+    """Nombre de PDF saneado y con longitud acotada (los handlers pueden pasar títulos crudos)."""
+    raiz = pdf_name[:-4] if pdf_name.lower().endswith(".pdf") else pdf_name
+    return clean_filename(raiz) + ".pdf"
 
 async def download_image(session: aiohttp.ClientSession, url: str, folder: str, index: int, log_callback: Callable[[str], None], headers: Optional[dict] = None) -> Optional[str]:
     """
@@ -288,10 +327,14 @@ def finalize_pdf_flow(image_paths: List[str], pdf_name: str, log_callback: Calla
     pdf_dir = os.path.join(project_root, PDF_FOLDER_NAME)
     os.makedirs(pdf_dir, exist_ok=True)
     
-    output_pdf = os.path.join(pdf_dir, pdf_name)
-    log_callback(f"[INFO] Generating PDF: {pdf_name}")
+    output_pdf = _reservar_salida(os.path.join(pdf_dir, _nombre_pdf_seguro(pdf_name)))
+    log_callback(f"[INFO] Generating PDF: {os.path.basename(output_pdf)}")
     
-    if create_pdf(image_paths, output_pdf, log_callback):
+    try:
+        ok = create_pdf(image_paths, output_pdf, log_callback)
+    finally:
+        _liberar_salida(output_pdf)
+    if ok:
         if open_result:
             if os.path.exists(output_pdf):
                 _open_file_or_folder(output_pdf)
@@ -315,11 +358,14 @@ async def async_finalize_pdf_flow(image_paths: List[str], pdf_name: str, log_cal
     pdf_dir = os.path.join(project_root, PDF_FOLDER_NAME)
     os.makedirs(pdf_dir, exist_ok=True)
     
-    output_pdf = os.path.join(pdf_dir, pdf_name)
-    log_callback(f"[INFO] Generating PDF: {pdf_name}")
+    output_pdf = _reservar_salida(os.path.join(pdf_dir, _nombre_pdf_seguro(pdf_name)))
+    log_callback(f"[INFO] Generating PDF: {os.path.basename(output_pdf)}")
     
     # Run CPU-bound PDF creation in a separate thread
-    success = await asyncio.to_thread(create_pdf, image_paths, output_pdf, log_callback)
+    try:
+        success = await asyncio.to_thread(create_pdf, image_paths, output_pdf, log_callback)
+    finally:
+        _liberar_salida(output_pdf)
     
     if success:
         if open_result:
@@ -353,8 +399,6 @@ async def download_and_make_pdf(image_urls: List[str], output_name: str, headers
     if os.path.exists(temp_folder): shutil.rmtree(temp_folder)
     os.makedirs(temp_folder, exist_ok=True)
     
-    files = []
-    
     files = await descargar_imagenes(image_urls, temp_folder, headers, log_callback, check_cancel, progress_callback)
     if check_cancel and check_cancel():
         # Cancelado: no se genera un PDF a medias
@@ -364,12 +408,16 @@ async def download_and_make_pdf(image_urls: List[str], output_name: str, headers
     if len(files) < len(image_urls):
         log_callback(f"[WARN] {len(image_urls) - len(files)} de {len(image_urls)} páginas no se pudieron descargar.")
 
-    files.sort()
-    
+    # Sin files.sort(): descargar_imagenes ya devuelve las páginas en orden, y ordenar por texto
+    # ponía "1000.jpg" antes que "101.jpg" en galerías de más de 999 páginas.
     if files:
         if is_path:
             # Special case where output_name is a full path (e.g. m440 chapter)
-            success = await asyncio.to_thread(create_pdf, files, output_name, log_callback)
+            salida = _reservar_salida(output_name)
+            try:
+                success = await asyncio.to_thread(create_pdf, files, salida, log_callback)
+            finally:
+                _liberar_salida(salida)
         else:
             await async_finalize_pdf_flow(files, output_name, log_callback, temp_folder, open_result=open_result)
             return
