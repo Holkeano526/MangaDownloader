@@ -55,7 +55,10 @@ def motivo_error(mensaje: str) -> str:
         return ("X pide iniciar sesión para ver este tuit (contenido sensible o cuenta protegida). "
                 "El bot solo descarga tuits públicos.")
     if "no video could be found" in m or "no video" in m:
-        return "Ese tuit no tiene vídeo (solo texto o imágenes)."
+        # Sin sesión, X tampoco enseña el vídeo de los tuits «Age-restricted adult content»:
+        # yt-dlp lo ve como un tuit sin vídeo y no hay forma de distinguirlo.
+        return ("No encontré vídeo en ese tuit. Si en X sale «Age-restricted adult content», es porque X "
+                "oculta el vídeo sin iniciar sesión, y el bot solo descarga tuits públicos sin restricción.")
     if "unavailable" in m or "not found" in m or "404" in m or "deleted" in m:
         return "El tuit no existe o ya no está disponible."
     if "rate" in m and "limit" in m:

@@ -147,6 +147,10 @@ class DiscordLogAdapter:
         self.logs = []
         self.generated_files = []
         self.titulo = None
+        # Nombre mientras no llega el título; un tuit no es un manga (ni tiene «continuación»)
+        host = host_de_url(url) or ""
+        self.es_tuit = any(dominio_coincide(host, d) for d in DOMINIOS_TWITTER)
+        self.nombre_defecto = "tuit" if self.es_tuit else "manga"
         self.fase = "Preparando..."
         self.actual = 0
         self.total = 0
@@ -177,7 +181,7 @@ class DiscordLogAdapter:
 
     # --- Construcción del embed ---------------------------------------------
     def _embed(self, color=None, titulo=None) -> discord.Embed:
-        nombre = self.titulo or "manga"
+        nombre = self.titulo or self.nombre_defecto
         embed = discord.Embed(
             title=(titulo or f"📥 Descargando: {nombre}")[:250],
             color=color or discord.Color.blue(),
@@ -222,7 +226,7 @@ class DiscordLogAdapter:
     async def cancelada(self):
         self.fase = f"Cancelada por el usuario tras {_fmt_tiempo(time.time() - self.inicio)}"
         await self._editar(True, quitar_boton=True, color=discord.Color.dark_grey(),
-                           titulo=f"⏹️ Descarga cancelada: {self.titulo or 'manga'}")
+                           titulo=f"⏹️ Descarga cancelada: {self.titulo or self.nombre_defecto}")
 
     def _programar(self, forzar: bool = False):
         try:
@@ -249,6 +253,9 @@ class DiscordLogAdapter:
 
         if m := re.search(r"Title detected: (.+)", text):
             self.titulo = m.group(1).strip()
+            forzar = True
+        elif m := re.search(r"\[INFO\] Tuit de (@\S+?):", text):
+            self.titulo = f"tuit de {m.group(1)}"
             forzar = True
         elif m := re.search(r"Images detected: (\d+)", text):
             n = int(m.group(1))
@@ -310,7 +317,7 @@ class DiscordLogAdapter:
             self.reintentos = 0  # ya no importan: todo llegó (o se avisa de lo que falta)
             color = discord.Color.green() if not self.paginas_perdidas else discord.Color.orange()
             icono = "✅" if not self.paginas_perdidas else "⚠️"
-            await self._editar(True, quitar_boton=True, color=color, titulo=f"{icono} Descargado: {self.titulo or 'manga'}")
+            await self._editar(True, quitar_boton=True, color=color, titulo=f"{icono} Descargado: {self.titulo or self.nombre_defecto}")
         else:
             detalle = "\n".join(l for l in self.logs if "[ERROR]" in l or "[WARN]" in l)[-900:]
             self.fase = f"No se generó ningún archivo ({duracion})"
@@ -630,7 +637,7 @@ async def descargar(ctx, url: str):
                 await ctx.send(f"Error processing file `{filename}`: {e}")
 
         # Autor y botones «Buscar continuación» / «Más obras del autor» (solo se busca si los pulsas)
-        if logger.generated_files and logger.titulo:
+        if logger.generated_files and logger.titulo and not logger.es_tuit:
             spawn(ofrecer_continuacion(ctx, logger.titulo, url))
 
     except Exception as e:
