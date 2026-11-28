@@ -27,5 +27,10 @@ class BaseSiteHandler(ABC):
             log_callback: Function to report logs
             check_cancel: Function returning True if cancellation is requested
             progress_callback: Optional function to report progress (current, total)
+
+        Returns:
+            None when the URL was handled here (PDF generated, or an error was logged).
+            A list of URLs when it is a series/list page: the bot queues each one as its own
+            download (cap the list at config.MAX_CAPITULOS_SERIE and log when truncating).
         """
         pass

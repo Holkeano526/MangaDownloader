@@ -5,13 +5,12 @@ import asyncio
 import os
 import re
 import shutil
-import uuid
-from typing import Callable, Optional
+from typing import Callable, List, Optional
 from playwright.async_api import async_playwright
 
 from .base import BaseSiteHandler
 from .. import config
-from ..utils import async_finalize_pdf_flow, clean_filename
+from ..utils import async_finalize_pdf_flow, clean_filename, nueva_carpeta_temporal
 
 
 def _escribir(ruta: str, datos: bytes) -> None:
@@ -32,7 +31,7 @@ class ShadeMangaHandler(BaseSiteHandler):
         log_callback: Callable[[str], None],
         check_cancel: Callable[[], bool],
         progress_callback: Optional[Callable[[int, int], None]] = None
-    ) -> None:
+    ) -> Optional[List[str]]:
         """
         Download images from Shademanga.com using Playwright to extract DOM
         image URLs, then downloading them directly.
@@ -62,6 +61,10 @@ class ShadeMangaHandler(BaseSiteHandler):
                                 if pid:
                                     chapter_urls.append(f"https://shademanga.com/reader/local/{pid}")
                                     
+                            if len(chapter_urls) > config.MAX_CAPITULOS_SERIE:
+                                log_callback(f"[WARN] La serie tiene {len(chapter_urls)} capítulos; se encolan "
+                                             f"los {config.MAX_CAPITULOS_SERIE} primeros.")
+                                chapter_urls = chapter_urls[:config.MAX_CAPITULOS_SERIE]
                             log_callback(f"[SUCCESS] Se han extraído {len(chapter_urls)} capítulos.")
                             return chapter_urls
                         else:
@@ -77,10 +80,8 @@ class ShadeMangaHandler(BaseSiteHandler):
 
         log_callback(f"[INIT] Processing ShadeManga URL: {url}...")
         
-        current_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        unique_id = uuid.uuid4().hex[:8]
-        temp_dir = os.path.join(current_dir, config.TEMP_FOLDER_NAME, f"shademanga_{unique_id}")
-        os.makedirs(temp_dir, exist_ok=True)
+        temp_dir = nueva_carpeta_temporal("shademanga")
+        unique_id = os.path.basename(temp_dir).rsplit("_", 1)[-1]  # para el título por defecto
 
         # try/finally: la carpeta temporal se borra también con los "return" tempranos y las
         # excepciones.
@@ -94,7 +95,7 @@ class ShadeMangaHandler(BaseSiteHandler):
             
                 browser = await p.chromium.launch(
                     headless=is_headless, 
-                    args=["--no-sandbox", "--disable-setuid-sandbox", "--start-maximized"]
+                    args=[*config.CHROMIUM_ARGS, "--start-maximized"]
                 )
                 context = await browser.new_context(
                     user_agent=config.USER_AGENT,

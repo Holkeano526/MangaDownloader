@@ -158,7 +158,7 @@ class HentaiNexusHandler(BaseSiteHandler):
         from playwright.async_api import async_playwright
         try:
             async with async_playwright() as p:
-                b = await p.chromium.launch(headless=True, args=["--no-sandbox", "--disable-setuid-sandbox"])
+                b = await p.chromium.launch(headless=True, args=config.CHROMIUM_ARGS)
                 pg = await (await b.new_context(user_agent=config.USER_AGENT)).new_page()
                 await pg.goto(f"{WEB}/read/{gid}", wait_until="domcontentloaded", timeout=60000)
                 await pg.wait_for_function("() => Array.isArray(window.pageData) && window.pageData.length > 0", timeout=20000)

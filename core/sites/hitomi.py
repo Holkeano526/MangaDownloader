@@ -7,7 +7,6 @@ import asyncio
 import os
 import re
 import shutil
-import uuid
 from typing import Callable, Optional
 from playwright.async_api import async_playwright
 import aiohttp
@@ -15,7 +14,7 @@ import aiohttp
 from .base import BaseSiteHandler
 from . import hitomi_http
 from .. import config
-from ..utils import async_finalize_pdf_flow, clean_filename, descargar_imagenes
+from ..utils import async_finalize_pdf_flow, clean_filename, descargar_imagenes, nueva_carpeta_temporal
 
 # Las imágenes se descargan con aiohttp y un límite POR galería (config.CONCURRENCIA_IMAGENES).
 # Antes: semáforo GLOBAL de 2 compartido por todas las descargas del bot y peticiones a
@@ -49,15 +48,6 @@ class HitomiHandler(BaseSiteHandler):
 
         log_callback(f"[INIT] Processing Hitomi ID: {gallery_id} (Batch Mode)...")
 
-        # Create temp directory
-        current_dir = os.path.dirname(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        )
-        unique_id = uuid.uuid4().hex[:8]
-        temp_dir = os.path.join(
-            current_dir, config.TEMP_FOLDER_NAME, f"hitomi_{gallery_id}_{unique_id}"
-        )
-
         download_targets = []
         image_urls = []
         title = f"Hitomi_{gallery_id}"
@@ -67,8 +57,8 @@ class HitomiHandler(BaseSiteHandler):
             timeout = aiohttp.ClientTimeout(total=30, connect=10)
             async with aiohttp.ClientSession(headers={"User-Agent": config.USER_AGENT}, timeout=timeout) as s:
                 page_title, image_urls = await hitomi_http.resolver(gallery_id, s)
-            clean_title = re.sub(r'[\\/*?:"<>|]', "", page_title).strip()
-            title = clean_title or title
+            if page_title.strip():
+                title = clean_filename(page_title)
             log_callback(f"[INFO] Title detected: {title}")
             log_callback(f"[INFO] Resolved without browser: {len(image_urls)} images.")
         except Exception as e:
@@ -86,7 +76,7 @@ class HitomiHandler(BaseSiteHandler):
 
                 browser = await p.chromium.launch(
                     headless=is_headless,
-                    args=["--no-sandbox", "--disable-setuid-sandbox"],
+                    args=config.CHROMIUM_ARGS,
                 )
                 context = await browser.new_context(
                     user_agent=config.USER_AGENT, viewport={"width": 1280, "height": 720}
@@ -109,9 +99,8 @@ class HitomiHandler(BaseSiteHandler):
                     # Extract title
                     title = f"Hitomi_{gallery_id}"
                     page_title = await page.title()
-                    if page_title:
-                        clean_title = re.sub(r'[\\/*?:"<>|]', "", page_title).strip()
-                        title = clean_title if clean_title else title
+                    if page_title and page_title.strip():
+                        title = clean_filename(page_title)
                     log_callback(f"[INFO] Title detected: {title}")
 
                     # Step 1: Wait for Hitomi's galleryinfo to initialize
@@ -213,7 +202,7 @@ class HitomiHandler(BaseSiteHandler):
 
         # La carpeta temporal se crea aquí (no antes del navegador) y el try/finally la borra
         # aunque algo lance una excepción.
-        os.makedirs(temp_dir, exist_ok=True)
+        temp_dir = nueva_carpeta_temporal(f"hitomi_{gallery_id}")
         try:
             # Step 4: descarga paralela con aiohttp, con el navegador ya cerrado (libera RAM)
             if image_urls:

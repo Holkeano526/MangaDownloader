@@ -21,4 +21,7 @@ COPY . .
 # 347 MB en un hilo. Con 2 la memoria libre se reutiliza en vez de repartirse.
 ENV MALLOC_ARENA_MAX=2
 
+# Sin USER: el bot corre como root a propósito. Los volúmenes del NAS (PDF/, Media/, .env) son de
+# root y con otro usuario fallarían las escrituras. El HEALTHCHECK (pgrep -f bot.py) está en la receta.
+
 CMD ["python", "bot.py"]

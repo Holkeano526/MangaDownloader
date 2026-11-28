@@ -3,8 +3,8 @@
 Module: bot
 Description: A Discord API integration (Discord Bot) for the Manga Downloader.
 It allows users to trigger downloads via Discord commands (e.g., !descargar <url>).
-The bot features live-updating embed messages for progress logs and automatically 
-uploads files exceeding Discord's 8MB limit to GoFile for easy user retrieval.
+The bot features live-updating embed messages for progress logs and automatically
+uploads files exceeding Discord's attachment limit to GoFile (see bot_gofile.py).
 
 Translation (MangaScan AI, also on the NAS):
   - "Traducir al español" button under every downloaded PDF.
@@ -21,8 +21,6 @@ import re
 import shutil
 import aiohttp
 import io
-import json
-import mimetypes
 import tempfile
 import threading
 import time
@@ -37,6 +35,8 @@ from core import busqueda
 from core import agrupador
 from core.sites import bunkr as bunkr_site
 from core.handler import obra_desde_enlace
+from core.utils import limpiar_temporales_huerfanos
+from bot_gofile import _entregar_pdf, _pdf_de_gofile, pdf_traducible, registrar_pdf_traducible
 from urllib.parse import urlparse
 
 load_dotenv()
@@ -45,13 +45,18 @@ TOKEN = os.getenv('DISCORD_TOKEN')
 # Configure core for Bot Mode (Silent)
 core.config.OPEN_RESULT_ON_FINISH = False
 
+MAX_DESCARGAS_SIMULTANEAS = 3
+MAX_TRADUCCIONES_SIMULTANEAS = 2  # MangaScan ya encola; esto evita subir 10 a la vez
+VISTA_TIMEOUT_SEG = 1800  # menús y botones de búsqueda/continuación: 30 min
+LIMPIEZA_TEMPORALES_HORAS = 6
+
 intents = discord.Intents.default()
 intents.message_content = True
 
 bot = commands.Bot(command_prefix='!', intents=intents)
 
-# Semaphore to allow up to 3 concurrent downloads (instead of a global Lock)
-download_semaphore = asyncio.Semaphore(3)
+download_semaphore = asyncio.Semaphore(MAX_DESCARGAS_SIMULTANEAS)
+traduccion_semaphore = asyncio.Semaphore(MAX_TRADUCCIONES_SIMULTANEAS)
 
 # Tareas en segundo plano: se guarda una referencia para que el recolector no las
 # destruya a medias y para registrar sus excepciones (create_task suelto las pierde).
@@ -355,193 +360,6 @@ def _barra(actual: int, total: int, ancho: int = 20) -> str:
     llenos = round(ancho * min(actual, total) / total)
     return "█" * llenos + "░" * (ancho - llenos)
 
-_gofile_token: Optional[str] = None
-_gofile_root: Optional[str] = None
-_gofile_public_folder: Optional[str] = None
-# Evita que dos primeras subidas simultáneas creen dos cuentas/carpetas de invitado
-_gofile_lock = asyncio.Lock()
-_GOFILE_TIMEOUT_API = aiohttp.ClientTimeout(total=60, sock_connect=15)
-_GOFILE_TIMEOUT_SUBIDA = aiohttp.ClientTimeout(total=1800, sock_connect=30, sock_read=300)
-
-
-def _gofile_reset() -> None:
-    """Olvida la cuenta de invitado: la siguiente subida crea una nueva (token caducado, 401/403...)."""
-    global _gofile_token, _gofile_root, _gofile_public_folder
-    _gofile_token = _gofile_root = _gofile_public_folder = None
-
-
-async def _ensure_gofile_account() -> bool:
-    """Creates/reuses a GoFile guest account token (the API now requires auth)."""
-    global _gofile_token, _gofile_root
-    if _gofile_token:
-        return True
-    async with _gofile_lock:
-        if _gofile_token:  # otra subida la creó mientras se esperaba el lock
-            return True
-        try:
-            async with aiohttp.ClientSession(timeout=_GOFILE_TIMEOUT_API) as session:
-                async with session.post('https://api.gofile.io/accounts', json={}) as resp:
-                    data = await resp.json()
-                    if resp.status == 200 and data.get('status') == 'ok':
-                        _gofile_token = data['data'].get('token')
-                        _gofile_root = data['data'].get('rootFolder')
-                        return bool(_gofile_token)
-        except Exception as e:
-            print(f"[ERROR GOFILE] account: {e}")
-    return False
-
-
-async def _ensure_gofile_public_folder() -> Optional[str]:
-    """Ensures a public folder exists in the GoFile account and returns its id.
-
-    Files must live inside a *public* folder for their download page to be
-    shareable; by default content is private ("not publicly accessible").
-    """
-    global _gofile_public_folder
-    if _gofile_public_folder:
-        return _gofile_public_folder
-    if not await _ensure_gofile_account():
-        return None
-    async with _gofile_lock:
-        if _gofile_public_folder:
-            return _gofile_public_folder
-        try:
-            headers = {'Authorization': f'Bearer {_gofile_token}'}
-            async with aiohttp.ClientSession(timeout=_GOFILE_TIMEOUT_API) as session:
-                payload = {
-                    'parentFolderId': _gofile_root,
-                    'folderName': 'manga',
-                    'public': True,
-                }
-                async with session.post(
-                    'https://api.gofile.io/contents/createFolder',
-                    json=payload,
-                    headers=headers,
-                ) as resp:
-                    if resp.status in (401, 403):
-                        _gofile_reset()
-                        return None
-                    data = await resp.json()
-                    if resp.status == 200 and data.get('status') == 'ok':
-                        _gofile_public_folder = data['data'].get('id')
-        except Exception as e:
-            print(f"[ERROR GOFILE] public folder: {e}")
-    return _gofile_public_folder
-
-
-async def upload_to_gofile(file_path: str) -> Optional[str]:
-    """Uploads a file to GoFile and returns the download link."""
-    try:
-        if not await _ensure_gofile_account():
-            return None
-        headers = {'Authorization': f'Bearer {_gofile_token}'}
-        folder_id = await _ensure_gofile_public_folder() or _gofile_root
-        async with aiohttp.ClientSession(timeout=_GOFILE_TIMEOUT_SUBIDA) as session:
-            async with session.get('https://api.gofile.io/servers', headers=headers,
-                                   timeout=_GOFILE_TIMEOUT_API) as resp:
-                if resp.status in (401, 403):
-                    _gofile_reset()
-                    return None
-                if resp.status != 200: return None
-                data = await resp.json()
-                if data.get('status') != 'ok': return None
-                
-                server = data['data']['servers'][0]['name']
-                upload_url = f'https://{server}.gofile.io/uploadFile'
-            
-            filename = os.path.basename(file_path)
-            extension = os.path.splitext(file_path)[1].lower()
-            ascii_filename = filename.encode('ascii', 'ignore').decode('ascii').replace(" ", "_")
-            # Strip leading punctuation/underscores left by removed non-ASCII chars
-            ascii_filename = ascii_filename.lstrip('._- ')
-            if not ascii_filename or "." not in ascii_filename:
-                # Un título solo con caracteres no ASCII dejaría un nombre sin extensión
-                ascii_filename = (ascii_filename or "archivo") + extension
-
-            tipo = mimetypes.guess_type(filename)[0] or "application/octet-stream"
-            with open(file_path, 'rb') as f:
-                form_data = aiohttp.FormData(quote_fields=False)
-                form_data.add_field('file', f, filename=ascii_filename, content_type=tipo)
-                if folder_id:
-                    form_data.add_field('folderId', folder_id)
-                
-                async with session.post(upload_url, data=form_data, headers=headers) as upload_resp:
-                    if upload_resp.status == 200:
-                        res = await upload_resp.json()
-                        if res.get('status') == 'ok':
-                            return res['data']['downloadPage']
-                    # Token o carpeta inválidos (cuenta de invitado caducada): se recrean en la próxima subida
-                    print(f"[ERROR GOFILE] upload HTTP {upload_resp.status}")
-                    _gofile_reset()
-    except Exception as e:
-        print(f"[ERROR GOFILE] {e}")
-    return None
-
-
-# ─── Traducción con MangaScan AI ──────────────────────────────────────────────
-# Índice "enlace de GoFile -> PDF local", para que !traducir <enlace> use la copia
-# del NAS en vez de volver a descargar de GoFile lo que el propio bot subió.
-_GOFILE_INDEX = os.path.join(os.getcwd(), core.config.PDF_FOLDER_NAME, ".gofile_index.json")
-traduccion_semaphore = asyncio.Semaphore(2)  # MangaScan ya encola; esto evita subir 10 a la vez
-
-
-def _registrar_gofile(link: str, file_path: str) -> None:
-    try:
-        datos = {}
-        if os.path.exists(_GOFILE_INDEX):
-            try:
-                with open(_GOFILE_INDEX, encoding="utf-8") as f:
-                    datos = json.load(f)
-            except json.JSONDecodeError:
-                datos = {}  # índice corrupto (p. ej. escritura cortada): se empieza de nuevo
-            if not isinstance(datos, dict):
-                datos = {}
-        datos[link.rstrip("/")] = os.path.abspath(file_path)
-        # Escritura atómica: un corte a mitad no deja el JSON a medias
-        tmp = _GOFILE_INDEX + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(datos, f, ensure_ascii=False, indent=1)
-        os.replace(tmp, _GOFILE_INDEX)
-    except Exception as e:
-        print(f"[WARN] No se pudo registrar el enlace de GoFile: {e}")
-
-
-def _pdf_de_gofile(link: str) -> Optional[str]:
-    try:
-        with open(_GOFILE_INDEX, encoding="utf-8") as f:
-            ruta = json.load(f).get(link.rstrip("/"))
-        return ruta if ruta and os.path.exists(ruta) else None
-    except Exception:
-        return None
-
-
-async def _entregar_pdf(channel, file_path: str, view: Optional[discord.ui.View] = None) -> Optional[str]:
-    """Envía un PDF por Discord, o por GoFile si supera el límite. Devuelve el enlace de GoFile si lo hubo."""
-    filename = os.path.basename(file_path)
-    size_mb = os.path.getsize(file_path) / (1024 * 1024)
-    if size_mb > 7.9:
-        await channel.send(f"[WARN] `{filename}` ({size_mb:.2f}MB) exceeds limit. Uploading to GoFile...")
-        link = await upload_to_gofile(file_path)
-        if link:
-            # Solo los PDF que se quedan en la carpeta del bot (las traducciones son temporales)
-            if os.path.abspath(file_path).startswith(os.path.dirname(_GOFILE_INDEX)):
-                _registrar_gofile(link, file_path)
-            if view is not None:
-                await channel.send(f"[SUCCESS] **{filename}**: {link}", view=view)
-            else:
-                await channel.send(f"[SUCCESS] **{filename}**: {link}")
-        else:
-            await channel.send(f"[ERROR] Failed to upload `{filename}` to GoFile.")
-        return link
-    if view is not None:
-        await channel.send(file=discord.File(file_path), view=view)
-    else:
-        await channel.send(file=discord.File(file_path))
-    return None
-
-
-
-
 async def traducir_y_entregar(channel, ruta_pdf: str, solicitante: str, borrar_al_final: bool = False,
                               solicitante_id: Optional[int] = None) -> None:
     """Manda un PDF local a MangaScan, muestra el progreso y entrega el resultado."""
@@ -618,7 +436,6 @@ async def traducir_y_entregar(channel, ruta_pdf: str, solicitante: str, borrar_a
             await mensaje.edit(embed=embed)
         except discord.errors.HTTPException:
             pass
-        import traceback
         traceback.print_exc()
     finally:
         # El PDF traducido queda guardado en MangaScan (Biblioteca); aquí era temporal.
@@ -639,31 +456,54 @@ async def traducir_y_entregar(channel, ruta_pdf: str, solicitante: str, borrar_a
                 pass
 
 
+class TraducirBoton(discord.ui.DynamicItem[discord.ui.Button], template=r"traducir:(?P<id>[0-9a-f]{16})"):
+    """Botón persistente "Traducir al español": el custom_id lleva un id corto del PDF
+    (índice en PDF/.traducir_index.json), así sigue funcionando tras reiniciar el bot."""
+
+    def __init__(self, pdf_id: str):
+        super().__init__(discord.ui.Button(label="Traducir al español", emoji="🌐",
+                                           style=discord.ButtonStyle.primary, custom_id=f"traducir:{pdf_id}"))
+        self.pdf_id = pdf_id
+
+    @classmethod
+    async def from_custom_id(cls, interaction: discord.Interaction, item: discord.ui.Button, match):
+        return cls(match["id"])
+
+    async def callback(self, interaction: discord.Interaction):
+        ruta = pdf_traducible(self.pdf_id)
+        if not ruta:
+            await interaction.response.send_message(
+                "[ERROR] Ese PDF ya no está en el NAS. Descárgalo de nuevo con !descargar o adjúntalo a !traducir.",
+                ephemeral=True)
+            return
+        self.item.disabled = True
+        self.item.label = "Traducción en marcha"
+        await interaction.response.edit_message(view=self.view)
+        spawn(traducir_y_entregar(interaction.channel, ruta, interaction.user.display_name,
+                                  solicitante_id=interaction.user.id), interaction.channel)
+
+
 class TraducirView(discord.ui.View):
-    """Botón "Traducir al español" bajo cada PDF descargado."""
+    """Vista con el botón persistente "Traducir al español" bajo cada PDF descargado.
+    Solo lleva un DynamicItem, así que discord.py no la guarda en memoria tras enviarla."""
 
     def __init__(self, file_path: str):
-        super().__init__(timeout=None)  # vive mientras el bot no se reinicie; después, !traducir <enlace>
-        self.file_path = file_path
+        super().__init__(timeout=None)
+        self.add_item(TraducirBoton(registrar_pdf_traducible(file_path)))
 
-    @discord.ui.button(label="Traducir al español", emoji="🌐", style=discord.ButtonStyle.primary)
-    async def traducir(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not os.path.exists(self.file_path):
-            await interaction.response.send_message("[ERROR] Ese PDF ya no está en el NAS.", ephemeral=True)
-            return
-        button.disabled = True
-        button.label = "Traducción en marcha"
-        await interaction.response.edit_message(view=self)
-        spawn(traducir_y_entregar(interaction.channel, self.file_path, interaction.user.display_name,
-                                  solicitante_id=interaction.user.id), interaction.channel)
+
+@bot.event
+async def setup_hook():
+    # Los botones «Traducir» enviados antes de un reinicio se resuelven por su custom_id
+    bot.add_dynamic_items(TraducirBoton)
+
 
 @bot.event
 async def on_ready():
     print(f'Bot connected as {bot.user}')
     # Carpetas de imágenes que dejó una descarga interrumpida (reinicio, OOM...). Solo las de más
     # de 6 h: on_ready también salta al reconectar y no debe tocar descargas en curso.
-    from core.utils import limpiar_temporales_huerfanos
-    borradas = await asyncio.to_thread(limpiar_temporales_huerfanos, 6)
+    borradas = await asyncio.to_thread(limpiar_temporales_huerfanos, LIMPIEZA_TEMPORALES_HORAS)
     if borradas:
         print(f"[INFO] {borradas} carpetas temporales huérfanas borradas")
 
@@ -747,7 +587,7 @@ async def descargar(ctx, url: str):
 
     logger = DiscordLogAdapter(ctx, url)
     if download_semaphore.locked():
-        logger.fase = "En cola (hay 3 descargas en marcha)..."
+        logger.fase = f"En cola (hay {MAX_DESCARGAS_SIMULTANEAS} descargas en marcha)..."
     await logger.initialize()
 
     try:
@@ -782,7 +622,7 @@ async def descargar(ctx, url: str):
         for file_path in logger.generated_files:
             filename = os.path.basename(file_path)
             try:
-                # Discord (8MB safe limit) o GoFile; el botón de traducir solo tiene sentido con PDF
+                # Discord (límite del servidor) o GoFile; el botón de traducir solo tiene sentido con PDF
                 vista = TraducirView(file_path) if file_path.lower().endswith(".pdf") else None
                 await _entregar_pdf(ctx.channel, file_path, view=vista)
             except Exception as e:
@@ -804,27 +644,47 @@ async def descargar(ctx, url: str):
 
 
 # ─── Búsqueda, autor y continuaciones ─────────────────────────────────────────
-ICONO_SITIO = {"hentainexus": "🟣", "nhentai.to": "🔴", "nhentai.xxx": "🔴", "nhentai.website": "🔴",
-               "tmohentai.app": "🟠", "lectorhentai": "🟢", "hitomi": "🔵", "3hentai": "🟡", "hentai2read": "🟤", "m440": "⚫", "hentalk": "🟦",
-               "erome": "🟠", "bunkr": "⚫", "notfans": "🔴", "fapsly": "🟣",
-               "thothub": "🟪", "ultrathots": "🟧", "sheeshfans": "🟨", "viralxxxporn": "🟥",
-               "xxbrits": "🔷", "dirtyship": "🟫", "gotanynudes": "🟩"}
+# Icono y color de cada sitio en las tarjetas de resultados (una sola tabla para que no se desfasen)
+SITIOS = {
+    "hentainexus": ("🟣", 0x9b59b6),
+    "nhentai.to": ("🔴", 0xe74c3c),
+    "nhentai.xxx": ("🔴", 0xe74c3c),
+    "nhentai.website": ("🔴", 0xe74c3c),
+    "tmohentai.app": ("🟠", 0xe67e22),
+    "lectorhentai": ("🟢", 0x2ecc71),
+    "hitomi": ("🔵", 0x3498db),
+    "3hentai": ("🟡", 0xf1c40f),
+    "hentai2read": ("🟤", 0x8e5a3c),
+    "m440": ("⚫", 0x34495e),
+    "hentalk": ("🟦", 0x1abc9c),
+    "erome": ("🟠", 0xe67e22),
+    "bunkr": ("⚫", 0x2c3e50),
+    "notfans": ("🔴", 0xe74c3c),
+    "fapsly": ("🟣", 0x9b59b6),
+    "thothub": ("🟪", 0x9b59b6),
+    "ultrathots": ("🟧", 0xe67e22),
+    "sheeshfans": ("🟨", 0xf1c40f),
+    "viralxxxporn": ("🟥", 0xe74c3c),
+    "xxbrits": ("🔷", 0x3498db),
+    "dirtyship": ("🟫", 0x8e5a3c),
+    "gotanynudes": ("🟩", 0x2ecc71),
+}
+_SITIO_DESCONOCIDO = ("⚪", 0x95a5a6)
+
+
+def _icono_sitio(sitio: str) -> str:
+    return SITIOS.get(sitio, _SITIO_DESCONOCIDO)[0]
+
+
+def _color_sitio(sitio: str) -> int:
+    return SITIOS.get(sitio, _SITIO_DESCONOCIDO)[1]
 
 
 def _linea_resultado(i: int, r: "busqueda.Resultado") -> str:
     # Los corchetes del título ("[Círculo (Artista)] ...") rompen el enlace markdown de Discord
     t = r.titulo[:90].replace("[", "(").replace("]", ")")
     return (f"**{i}.** {busqueda.BANDERA.get(r.idioma, '🏳️')} [{t}]({r.url}) "
-            f"{ICONO_SITIO.get(r.sitio, '⚪')} `{r.sitio}`")
-
-
-COLOR_SITIO = {"hentainexus": 0x9b59b6, "nhentai.to": 0xe74c3c, "nhentai.xxx": 0xe74c3c, "nhentai.website": 0xe74c3c,
-               "tmohentai.app": 0xe67e22, "lectorhentai": 0x2ecc71, "hitomi": 0x3498db,
-               "3hentai": 0xf1c40f, "hentai2read": 0x8e5a3c, "m440": 0x34495e, "hentalk": 0x1abc9c,
-               "erome": 0xe67e22, "bunkr": 0x2c3e50, "notfans": 0xe74c3c, "fapsly": 0x9b59b6,
-               "thothub": 0x9b59b6, "ultrathots": 0xe67e22, "sheeshfans": 0xf1c40f,
-               "viralxxxporn": 0xe74c3c, "xxbrits": 0x3498db, "dirtyship": 0x8e5a3c,
-               "gotanynudes": 0x2ecc71}
+            f"{_icono_sitio(r.sitio)} `{r.sitio}`")
 
 
 async def _bajar_portada(session: aiohttp.ClientSession, r) -> Optional[tuple]:
@@ -832,7 +692,6 @@ async def _bajar_portada(session: aiohttp.ClientSession, r) -> Optional[tuple]:
     imágenes rechazan otro origen, así que Discord no podría cargarlas desde el enlace)."""
     if not r.portada:
         return None
-    from urllib.parse import urlparse
     origen = "{0.scheme}://{0.netloc}/".format(urlparse(r.url))
     try:
         async with session.get(r.portada, headers={"Referer": origen}) as resp:
@@ -866,7 +725,7 @@ async def tarjetas_resultados(resultados, desde: int = 1):
         portadas = await asyncio.gather(*(_bajar_portada(s, r) for r in resultados))
     embeds, archivos = [], []
     for i, (r, portada) in enumerate(zip(resultados, portadas), start=desde):
-        descripcion = f"{busqueda.BANDERA.get(r.idioma, '🏳️')} {ICONO_SITIO.get(r.sitio, '⚪')} `{r.sitio}`"
+        descripcion = f"{busqueda.BANDERA.get(r.idioma, '🏳️')} {_icono_sitio(r.sitio)} `{r.sitio}`"
         if busqueda.es_sin_censura(r.titulo):
             descripcion += " · 🔓 sin censura"
         if r.extra.get("codigo"):  # resultado de una búsqueda por código: más datos para distinguirlos
@@ -875,7 +734,7 @@ async def tarjetas_resultados(resultados, desde: int = 1):
                 descripcion += f" · {r.extra['paginas']} págs."
             if r.extra.get("artistas"):
                 descripcion += f"\n✍️ {', '.join(r.extra['artistas'])[:200]}"
-        e = discord.Embed(title=f"{i}. {r.titulo}"[:256], url=r.url, color=COLOR_SITIO.get(r.sitio, 0x95a5a6),
+        e = discord.Embed(title=f"{i}. {r.titulo}"[:256], url=r.url, color=_color_sitio(r.sitio),
                           description=descripcion)
         if portada:
             nombre = f"portada_{i}.{portada[1]}"
@@ -889,7 +748,7 @@ class ElegirDescargaView(discord.ui.View):
     """Menú desplegable para descargar uno de los resultados (búsqueda o continuaciones)."""
 
     def __init__(self, ctx, resultados, placeholder: str = "Elige uno para descargarlo"):
-        super().__init__(timeout=1800)
+        super().__init__(timeout=VISTA_TIMEOUT_SEG)
         self.ctx = ctx
         self.resultados = resultados[:25]
         menu = discord.ui.Select(
@@ -947,7 +806,7 @@ class SeriesView(discord.ui.View):
     y botón para ver la lista completa de resultados paginada."""
 
     def __init__(self, ctx, texto: str, series, todos, segundos: float, actual_url: str = ""):
-        super().__init__(timeout=1800)
+        super().__init__(timeout=VISTA_TIMEOUT_SEG)
         self.ctx, self.texto, self.series, self.todos, self.segundos = ctx, texto, series, todos, segundos
         opciones, self.mapa = [], []
         for si, serie in enumerate(series):
@@ -1126,7 +985,7 @@ class AccionesObraView(discord.ui.View):
     """Tras una descarga: botones para buscar la continuación y más obras del autor."""
 
     def __init__(self, ctx, titulo: str, url: str, autor: Optional[str]):
-        super().__init__(timeout=1800)
+        super().__init__(timeout=VISTA_TIMEOUT_SEG)
         self.ctx, self.titulo, self.url, self.autor = ctx, titulo, url, autor
         b = discord.ui.Button(label="🔎 Buscar continuación", style=discord.ButtonStyle.primary)
         b.callback = self._continuacion
@@ -1467,7 +1326,7 @@ class ResultadosPaginadosView(discord.ui.View):
 
     def __init__(self, ctx, texto: str, resultados, segundos: float, nota: str = "",
                  solo_descarga: bool = False, comando: str = "buscar"):
-        super().__init__(timeout=1800)
+        super().__init__(timeout=VISTA_TIMEOUT_SEG)
         self.ctx, self.texto, self.resultados, self.segundos = ctx, texto, resultados, segundos
         self.nota = nota  # línea extra bajo la cabecera (p. ej. el aviso de la búsqueda por código)
         # !leak: solo descargar (no tiene sentido «continuación», «autor» ni «sin censura»)

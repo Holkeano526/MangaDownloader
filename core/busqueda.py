@@ -93,7 +93,9 @@ _PARTE = re.compile(r"\s+(?:part|parte|vol(?:ume|umen)?|ch(?:apter)?|cap(?:itulo
 
 def titulo_base(t: str) -> Tuple[str, Optional[float]]:
     """'The Wife-Lenders 1' -> ('the wife lenders', 1). Sin número -> (título, None)."""
-    n = normalizar(t)
+    # normalizar() quita los puntos y "Parte 2.5" quedaba como parte 5 de "parte 2": se protege
+    # el punto decimal entre dígitos con un marcador que sobrevive a la normalización.
+    n = normalizar(re.sub(r"(\d)\.(\d)", r"\1qdecq\2", t or "")).replace("qdecq", ".")
     m = _PARTE.search(n)
     if m and m.start() > 0:
         return n[:m.start()].strip(), float(m.group(1))

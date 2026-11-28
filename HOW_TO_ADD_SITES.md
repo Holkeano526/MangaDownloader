@@ -58,7 +58,11 @@ Reglas:
 - **No descargues tú las imágenes:** `download_and_make_pdf` ya hace el pool paralelo, los reintentos ante
   429/5xx, la conversión WebP/AVIF → JPEG y la cancelación sin dejar PDFs a medias.
 - **Series:** si la URL es la página de una serie, devuelve `list[str]` con las URLs de los capítulos; las
-  interfaces los ponen en cola.
+  interfaces los ponen en cola. Recorta la lista a `config.MAX_CAPITULOS_SERIE` y avisa con `[WARN]` si sobran.
+  Si no, devuelve `None` (anota `-> Optional[List[str]]`).
+- **Playwright:** lanza Chromium con `args=config.CHROMIUM_ARGS` (lleva `--no-sandbox`, necesario en Docker como
+  root). Si necesitas una carpeta temporal propia, créala con `nueva_carpeta_temporal("nuevositio")` de
+  `core.utils` (así la ve la limpieza de huérfanos al arrancar) y bórrala en un `finally`.
 - **Vídeos u otros archivos:** usa `descargar_archivo(url, destino, cabeceras, log_callback, check_cancel)` y
   guarda en `carpeta_media()` con `nombre_media(titulo, "mp4")`. Avisa con `[SUCCESS] File Generated: <ruta>`
   (el bot lo entrega igual que `[SUCCESS] PDF Generated:`). En los sitios de `!leak` **solo se descargan
@@ -91,3 +95,18 @@ python -c "import asyncio; from core import busqueda; print(asyncio.run(busqueda
 ```
 
 Y una descarga real con `!descargar <url>`.
+
+## 4. Tests
+
+Pruebas automáticas sin red (pytest), en `tests/`:
+
+```bash
+pip install -r requirements-dev.txt
+python -m pytest -q
+```
+
+Si el sitio nuevo tiene funciones puras de parseo (sacar el título, la lista de páginas o el JSON del HTML,
+descifrar datos...), sepáralas del `process` y añade un test en `tests/test_sitios_parseo.py` (o en
+`tests/test_<sitio>.py`) con un trozo de HTML escrito a mano en el propio test. **No descargues páginas
+reales** ni hagas peticiones: los tests deben pasar sin conexión. Si el dominio es nuevo, añade también un caso
+a `test_enrutado_valido` en `tests/test_handler_urls.py`.

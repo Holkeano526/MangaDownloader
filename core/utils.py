@@ -144,13 +144,28 @@ async def _es_imagen(content_type: str, datos: bytes) -> bool:
     return await asyncio.to_thread(_verificar_con_pillow, datos)
 
 
+def _raiz_temporal() -> str:
+    return os.path.join(os.getcwd(), TEMP_FOLDER_NAME)
+
+
+def nueva_carpeta_temporal(prefijo: str) -> str:
+    """Crea y devuelve una subcarpeta única ("<prefijo>_<uuid8>") de la carpeta temporal.
+
+    Todos los handlers deben usarla: antes unos partían de la raíz del paquete y otros de
+    os.getcwd(), y limpiar_temporales_huerfanos no veía las de los primeros si no coincidían.
+    """
+    ruta = os.path.join(_raiz_temporal(), f"{clean_filename(prefijo)}_{uuid.uuid4().hex[:8]}")
+    os.makedirs(ruta, exist_ok=True)
+    return ruta
+
+
 def limpiar_temporales_huerfanos(max_horas: float = 6) -> int:
     """Borra subcarpetas de la carpeta temporal con más de `max_horas` sin modificar.
 
     Quedan si el proceso muere a mitad de una descarga (reinicio, OOM). Pensado para llamarse
     al arrancar el bot. Devuelve cuántas carpetas se borraron.
     """
-    raiz = os.path.join(os.getcwd(), TEMP_FOLDER_NAME)
+    raiz = _raiz_temporal()
     if not os.path.isdir(raiz):
         return 0
     limite = time.time() - max_horas * 3600
@@ -378,41 +393,11 @@ def _open_file_or_folder(file_path: str):
         pass  # Never crash on file-opening failure
 
 
-def finalize_pdf_flow(image_paths: List[str], pdf_name: str, log_callback: Callable[[str], None], 
-                      temp_dir: Optional[str] = None, open_result: bool = True):
-    """
-    Creates PDF, Opens it/Folder (if open_result is True), and Cleans up temp dir.
-    """
-    project_root = os.getcwd() 
-    pdf_dir = os.path.join(project_root, PDF_FOLDER_NAME)
-    os.makedirs(pdf_dir, exist_ok=True)
-    
-    output_pdf = _reservar_salida(os.path.join(pdf_dir, _nombre_pdf_seguro(pdf_name)))
-    log_callback(f"[INFO] Generating PDF: {os.path.basename(output_pdf)}")
-    
-    try:
-        ok = create_pdf(image_paths, output_pdf, log_callback)
-    finally:
-        _liberar_salida(output_pdf)
-    if ok:
-        if open_result:
-            if os.path.exists(output_pdf):
-                _open_file_or_folder(output_pdf)
-        log_callback("[DONE] Finished.")
-    else:
-        log_callback("[ERROR] Could not create PDF.")
-
-    if temp_dir and os.path.exists(temp_dir):
-        try:
-            shutil.rmtree(temp_dir)
-        except: pass
-
-
 async def async_finalize_pdf_flow(image_paths: List[str], pdf_name: str, log_callback: Callable[[str], None], 
                                    temp_dir: Optional[str] = None, open_result: bool = True):
     """
-    Async version of finalize_pdf_flow. Runs CPU-bound create_pdf in a thread
-    to avoid blocking the event loop, then opens the file and cleans up.
+    Creates the PDF (create_pdf runs in a thread so the event loop is not blocked),
+    opens it/its folder if open_result is True, and cleans up temp_dir.
     """
     project_root = os.getcwd() 
     pdf_dir = os.path.join(project_root, PDF_FOLDER_NAME)
@@ -447,17 +432,9 @@ async def download_and_make_pdf(image_urls: List[str], output_name: str, headers
     """
     Orchestration function: Downloads images in chunks -> Creates PDF/Folder -> Cleans up.
     """
-    project_root = os.getcwd()
-    
-    # Generate unique temp folder using output name and UUID
+    # Carpeta temporal única: nombre de salida + UUID
     base_name = os.path.basename(output_name)
-    safe_name = clean_filename(base_name.replace('.pdf', ''))
-    unique_id = uuid.uuid4().hex[:8]
-    temp_folder = os.path.join(project_root, TEMP_FOLDER_NAME, f"{safe_name}_{unique_id}")
-    
-    # Clean/Create temp folder
-    if os.path.exists(temp_folder): shutil.rmtree(temp_folder)
-    os.makedirs(temp_folder, exist_ok=True)
+    temp_folder = nueva_carpeta_temporal(base_name.replace('.pdf', ''))
 
     # try/finally: si algo lanza una excepción (red, disco, cancelación de la tarea) la carpeta
     # temporal no se queda huérfana.
