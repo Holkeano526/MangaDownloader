@@ -5,7 +5,3 @@ playwright
 crawl4ai
 python-dotenv
 img2pdf
-fastapi
-uvicorn
-python-multipart
-websockets

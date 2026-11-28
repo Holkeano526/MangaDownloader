@@ -22,8 +22,5 @@ RUN playwright install-deps
 # Copy app code
 COPY . .
 
-# Expose port (FastAPI default)
-EXPOSE 8000
-
-# Run the server
-CMD ["python", "web_server.py"]
+# Run the Discord bot (en el NAS se usa Dockerfile.bot sobre la base congelada)
+CMD ["python", "bot.py"]

@@ -4,8 +4,8 @@ Descarga mangas, doujinshi y cómics a PDF y **contenido de creadoras de OnlyFan
 a MP4), **busca en todos a la vez** con `!buscar` (manga) y `!leak` (creadoras), agrupa las partes de una serie
 con IA (DeepSeek) y, con un botón, **los traduce** con [MangaScan AI](https://github.com/Holkeano526/mangascan).
 
-Se usa sobre todo como **bot de Discord** (corre en un NAS con Docker), pero el mismo núcleo (`core/`) sirve
-también a una interfaz web (Next.js + FastAPI) y a una app de escritorio (Tkinter).
+Es un **bot de Discord** (corre en un NAS con Docker); toda la lógica de descarga y búsqueda está en `core/`.
+La interfaz web (Next.js + FastAPI) y la app de escritorio (Tkinter) se retiraron el 27/11/2026.
 
 ## Repos hermanos
 
@@ -13,7 +13,7 @@ MangaDownloader y MangaScan AI son **dos repos hermanos**: se desarrollan y desp
 
 | Repo | Qué hace | En el NAS |
 |---|---|---|
-| [**MangaDownloader**](https://github.com/Holkeano526/MangaDownloader) | Descarga a PDF/MP4 desde 25 sitios, `!buscar` en todos a la vez, agrupación de series con DeepSeek. Bot de Discord, web y escritorio | `manga_discord_bot` (receta OMV `manga-downloader`) |
+| [**MangaDownloader**](https://github.com/Holkeano526/MangaDownloader) | Descarga a PDF/MP4 desde 25 sitios, `!buscar` en todos a la vez, agrupación de series con DeepSeek. Bot de Discord | `manga_discord_bot` (receta OMV `manga-downloader`) |
 | [**MangaScan AI**](https://github.com/Holkeano526/mangascan) | Traduce el PDF al español latino: detección y borrado en la iGPU, OCR y DeepSeek | `mangascan-ai`, puerto `8001` |
 
 **Contrato entre los dos** (`mangascan_client.py` en MangaDownloader ↔ API de MangaScan):
@@ -185,8 +185,6 @@ Antes de reiniciar el bot, comprobar que no haya una descarga ni una traducción
 pip install -r requirements.txt
 playwright install chromium
 python bot.py          # bot de Discord (requiere .env con DISCORD_TOKEN)
-python app.py          # escritorio
-START_WEB_VERSION.bat  # web: FastAPI :8000 + Next.js :3000 (Windows)
 ```
 
 ## Estructura
@@ -194,8 +192,6 @@ START_WEB_VERSION.bat  # web: FastAPI :8000 + Next.js :3000 (Windows)
 ```
 bot.py               Bot de Discord: comandos, vistas (botones/menús), entrega y traducción
 mangascan_client.py  Cliente HTTP de MangaScan AI (subida, progreso, cancelar)
-app.py               App de escritorio (Tkinter)
-web_server.py        API FastAPI + WebSocket para web_client_next/
 core/
   handler.py         Enrutador URL → handler (el orden importa)
   utils.py           Motor de descarga, conversión de imágenes y PDF

@@ -85,4 +85,4 @@ python -c "from core.handler import HANDLERS; print([h.__name__ for h in HANDLER
 python -c "import asyncio; from core import busqueda; print(asyncio.run(busqueda.buscar('texto'))[:3])"
 ```
 
-Y una descarga real con `!descargar <url>` (o `python app.py`).
+Y una descarga real con `!descargar <url>`.
