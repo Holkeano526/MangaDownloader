@@ -71,7 +71,8 @@ async def process_entry(
         progress_callback (Optional[Callable]): Function to emit progress updates (current, total) to the frontend.
     
     Returns:
-        None: Side-effect function that drives the download processing.
+        None si la descarga se hizo aquí (o falló con un mensaje en el log); una lista de URLs
+        si el enlace es una serie/lista y el bot debe encolar cada una (ver BaseSiteHandler.process).
     """
     hostname = host_de_url(url)
     if not hostname:

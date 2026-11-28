@@ -142,7 +142,7 @@ class LectorHentaiHandler(BaseSiteHandler):
         vistas: List[str] = []
         try:
             async with async_playwright() as p:
-                b = await p.chromium.launch(headless=True, args=["--no-sandbox", "--disable-setuid-sandbox"])
+                b = await p.chromium.launch(headless=True, args=config.CHROMIUM_ARGS)
                 pg = await (await b.new_context(user_agent=config.USER_AGENT)).new_page()
                 pg.on("request", lambda r: vistas.append(r.url)
                       if f"/library/{manga_id}/" in r.url and "cover" not in r.url else None)

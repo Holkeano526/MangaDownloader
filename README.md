@@ -181,6 +181,8 @@ Antes de reiniciar el bot, comprobar que no haya una descarga ni una traducción
 
 ### Local
 
+El proyecto apunta a **Python 3.10** (la imagen del NAS usa 3.10.21; ver `.python-version`).
+
 ```bash
 pip install -r requirements.txt
 playwright install chromium
@@ -191,6 +193,7 @@ python bot.py          # bot de Discord (requiere .env con DISCORD_TOKEN)
 
 ```
 bot.py               Bot de Discord: comandos, vistas (botones/menús), entrega y traducción
+bot_gofile.py        Entrega de archivos: subida a GoFile, índices en PDF/ y límite de adjuntos
 mangascan_client.py  Cliente HTTP de MangaScan AI (subida, progreso, cancelar)
 core/
   handler.py         Enrutador URL → handler (el orden importa)

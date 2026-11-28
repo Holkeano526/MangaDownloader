@@ -69,7 +69,12 @@ class H2RHandler(BaseSiteHandler):
                 urls = [f"{WEB}{props['read']['url']}"]
             if len(urls) > 1:
                 log_callback(f"[INFO] Serie con {len(urls)} capítulos.")
-                return list(reversed(urls))  # el sitio los lista del más nuevo al más antiguo
+                urls = list(reversed(urls))  # el sitio los lista del más nuevo al más antiguo
+                if len(urls) > config.MAX_CAPITULOS_SERIE:
+                    log_callback(f"[WARN] Se encolan los {config.MAX_CAPITULOS_SERIE} primeros capítulos "
+                                 f"de {len(urls)}.")
+                    urls = urls[:config.MAX_CAPITULOS_SERIE]
+                return urls
             if not urls:
                 log_callback("[ERROR] La ficha de Hentai2Read no tiene capítulos.")
                 return None

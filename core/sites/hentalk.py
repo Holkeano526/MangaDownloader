@@ -8,13 +8,12 @@ import os
 import re
 import json
 import shutil
-import uuid
 from typing import Callable, Optional
 from playwright.async_api import async_playwright
 
 from .base import BaseSiteHandler
 from .. import config
-from ..utils import clean_filename
+from ..utils import clean_filename, nueva_carpeta_temporal
 
 # Semaphore to limit concurrent downloads and avoid 429
 DOWNLOAD_SEMAPHORE = asyncio.Semaphore(5)
@@ -52,15 +51,7 @@ class HentalkHandler(BaseSiteHandler):
         gallery_id = id_match.group(1)
         log_callback(f"[INIT] Processing Hentalk ID: {gallery_id}...")
 
-        # Create temp directory
-        current_dir = os.path.dirname(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        )
-        unique_id = uuid.uuid4().hex[:8]
-        temp_dir = os.path.join(
-            current_dir, config.TEMP_FOLDER_NAME, f"hentalk_{gallery_id}_{unique_id}"
-        )
-        os.makedirs(temp_dir, exist_ok=True)
+        temp_dir = nueva_carpeta_temporal(f"hentalk_{gallery_id}")
 
         # try/finally: la carpeta temporal se borra también con los "return" tempranos y las
         # excepciones (antes quedaba huérfana).
@@ -80,7 +71,7 @@ class HentalkHandler(BaseSiteHandler):
 
                 browser = await p.chromium.launch(
                     headless=is_headless,
-                    args=["--no-sandbox", "--disable-setuid-sandbox", "--start-maximized"],
+                    args=[*config.CHROMIUM_ARGS, "--start-maximized"],
                 )
                 context = await browser.new_context(
                     user_agent=config.USER_AGENT, viewport={"width": 1280, "height": 720}

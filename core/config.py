@@ -29,5 +29,13 @@ REINTENTOS_IMAGEN = 4      # 429/5xx/timeouts: reintento con espera creciente
 # 70 = igual que siempre. 80 mejora algo la imagen: +0,6 s y +19 % de tamaño (medido).
 JPEG_CALIDAD = int(os.getenv("JPEG_CALIDAD", "70"))
 
+# Máximo de capítulos/galerías que un enlace de serie o lista puede encolar de una vez.
+MAX_CAPITULOS_SERIE = 60
+
+# Argumentos de TODOS los Chromium que lanza Playwright. En Docker el bot corre como root y
+# Chromium se niega a arrancar como root con el sandbox activo: --no-sandbox es obligatorio ahí.
+# Riesgo asumido: una página maliciosa que explote Chromium no queda aislada por su sandbox.
+CHROMIUM_ARGS = ["--no-sandbox", "--disable-setuid-sandbox"]
+
 # Runtime Flags
 OPEN_RESULT_ON_FINISH = True

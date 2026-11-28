@@ -14,3 +14,11 @@ temp_manga_images/
 .dockerignore
 Dockerfile
 README.md
+# Nada de esto hace falta en la imagen (los Dockerfile solo usan requirements.txt y el código)
+.claude/
+docs/
+Media/
+tests/
+*.md
+.python-version
+requirements-lock.txt
