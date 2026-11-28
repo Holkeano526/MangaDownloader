@@ -8,10 +8,12 @@ venv/
 __pycache__/
 *.py[cod]
 
-# Downloaded Content (PDFs and images)
+# Downloaded Content (PDFs, images and videos)
 PDF/
+Media/
 temp_manga_images/
 *.pdf
+*.part
 
 # Logs
 *.log

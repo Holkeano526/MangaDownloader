@@ -59,6 +59,10 @@ Reglas:
   429/5xx, la conversión WebP/AVIF → JPEG y la cancelación sin dejar PDFs a medias.
 - **Series:** si la URL es la página de una serie, devuelve `list[str]` con las URLs de los capítulos; las
   interfaces los ponen en cola.
+- **Vídeos u otros archivos:** usa `descargar_archivo(url, destino, cabeceras, log_callback, check_cancel)` y
+  guarda en `carpeta_media()` con `nombre_media(titulo, "mp4")`. Avisa con `[SUCCESS] File Generated: <ruta>`
+  (el bot lo entrega igual que `[SUCCESS] PDF Generated:`). En los sitios de `!leak` **solo se descargan
+  vídeos**; las fotos se ignoran.
 - Comprueba el número de páginas real (algunos sitios responden 200 con 0 bytes para páginas que no existen).
 
 ## 2. Búsqueda (opcional)
@@ -70,6 +74,9 @@ En `core/busqueda.py`:
 2. Añádela a `BUSCADORES`.
 3. Si el sitio tiene un solo idioma, añádelo a `_IDIOMA_SITIO`. Si sus resultados son fiables aunque el título
    no coincida (también busca por artista o etiqueta), añádelo a `ESTRICTOS`.
+4. Si es un sitio de creadoras (catálogo grande, búsqueda por nombre/etiqueta), añádelo también a
+   `BUSCADORES_CREADORAS` y a `CREADORAS`: lo usa `!leak` (no `!buscar`), con una puntuación mínima y un
+   tope por sitio para que no tape a los demás.
 
 ## 3. Probar
 

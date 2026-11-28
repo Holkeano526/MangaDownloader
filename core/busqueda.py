@@ -2,6 +2,7 @@
 Búsqueda en todos los sitios compatibles, autor de una galería y continuaciones.
 
   buscar(texto)           -> resultados de todos los sitios en paralelo, ordenados por parecido
+  buscar_creadoras(texto) -> solo sitios de creadoras (Erome, Bunkr, NotFans, Fapsly): !leak
   autor(url, titulo)      -> autor/artista de una galería (enlace de artista o "[Círculo (Artista)]")
   continuaciones(titulo)  -> otras partes de la misma serie (número mayor) y obras relacionadas
 
@@ -20,6 +21,16 @@ Búsqueda por sitio (vista el 25/11/2026; todo por HTTP):
   allporncomic.com  /?s=<texto>&post_type=wp-manga  (Madara; resultado = cómic, se descarga por capítulos)
   sexkomix2.com     /search/?lang=en&q=<texto>  (y lang=es; href con espacios alrededor del "=")
   hitomi.la         índices binarios (árbol B de palabras del título + ficheros .nozomi de artista/grupo)
+
+Creadoras de OnlyFans (todo por HTTP):
+  es.erome.com      /search?q=<texto>           álbumes de fotos/vídeos
+  bunkrsearch.com   /search?q=<texto>           índice de álbumes de bunkr.cr
+  notfans.vip       /search/<texto>/            vídeos (KVS)
+  fapsly.net        /search/<texto>/            posts con fotos y vídeos
+  thothub.to, ultrathots.com, sheeshfans.com, viralxxxporn.com, xxbrits.com
+                    /search/?q=<texto>          tubos KVS (solo vídeos)
+  dirtyship.com, gotanynudes.com
+                    /?s=<texto>                 WordPress con MP4 propio (solo vídeos)
 """
 from __future__ import annotations
 
@@ -34,6 +45,8 @@ from urllib.parse import quote_plus, urljoin, urlparse
 import aiohttp
 
 from . import config
+from .sites.tubos import TUBOS as _TUBOS
+from .sites.wpvideos import WORDPRESS as _WORDPRESS, posts_de as _wp_posts
 
 TIMEOUT = aiohttp.ClientTimeout(total=20, connect=8)
 
@@ -111,7 +124,7 @@ def _normalizar_completo(t: str) -> str:
 # 3hentai NO es estricto: con una búsqueda sin coincidencias devuelve igualmente 25 galerías
 # (comprobado con "zzqqxxnotexist"), que se colaban como si casaran por artista.
 ESTRICTOS = {"hitomi", "hentainexus", "nhentai.to", "nhentai.xxx", "nhentai.website", "hentai2read", "m440",
-             "hentalk", "imhentai", "allporncomic"}
+             "hentalk", "imhentai", "allporncomic", "erome", "bunkr", "notfans", "fapsly"}
 PUNTUACION_POR_ETIQUETA = 0.6
 
 
@@ -309,12 +322,104 @@ async def _sexkomix2(s, q):
 
 
 
-BUSCADORES = [_hitomi, _hentainexus, _nhentai_to, _nhentai_xxx, _nhentai_website, _3hentai, _hentai2read, _m440,
-              _hentalk, _tmohentai, _lectorhentai, _imhentai, _allporncomic, _sexkomix2]
+# ─── Creadoras de OnlyFans (Erome, Bunkr, NotFans, Fapsly) ───────────────────
+async def _erome(s, q):
+    """Erome: /search?q= devuelve álbumes (tarjeta con título e imagen)."""
+    p = await _get(s, f"https://es.erome.com/search?q={quote_plus(q)}")
+    return [("erome", t, u, img) for u, t, img in
+            _enlaces(p, "https://es.erome.com/", r"/a/[A-Za-z0-9]+")]
 
 
-async def buscar(texto: str, minimo: float = 0.6, limite: int = 25) -> List[Resultado]:
-    """Busca en todos los sitios a la vez. Un sitio caído o lento no bloquea al resto."""
+async def _bunkr(s, q):
+    """Bunkr Search (índice de álbumes de bunkr.cr): /search?q=."""
+    p = await _get(s, f"https://bunkrsearch.com/search?q={quote_plus(q)}")
+    res = []
+    for m in re.finditer(r'<article[^>]*data-slug="([^"]+)"[\s\S]*?</article>', p):
+        bloque = m.group(0)
+        t = re.search(r'data-alt="([^"]*)"', bloque) or \
+            re.search(r'<span class="line-clamp-2[^"]*">([^<]+)</span>', bloque)
+        img = re.search(r'<img[^>]+src="([^"]+)"', bloque)
+        if t and t.group(1).strip():
+            res.append(("bunkr", html.unescape(t.group(1).strip()),
+                        f"https://bunkr.cr/a/{m.group(1)}", img.group(1) if img else ""))
+    return res
+
+
+async def _notfans(s, q):
+    """NotFans (KVS): /search/<texto>/ devuelve vídeos de creadoras."""
+    p = await _get(s, f"https://notfans.vip/search/{quote_plus(q)}/")
+    return [("notfans", t, u, img) for u, t, img in
+            _enlaces(p, "https://notfans.vip/", r"/videos/\d+")]
+
+
+async def _fapsly(s, q):
+    """Fapsly: /search/<texto>/ devuelve posts (fotos y vídeos) de creadoras."""
+    from .sites import fapsly
+    p = await fapsly._pedir(s, f"https://fapsly.net/search/{quote_plus(q)}/")
+    return [("fapsly", t, u, img) for u, t, img in
+            _enlaces(p, "https://fapsly.net/", r"/onlyfans/[A-Za-z0-9_]+/[A-Za-z0-9_-]+/")]
+
+
+def _buscador_tubo(cfg):
+    """Buscador de un tubo KVS (ThotHub, Ultrathots, SheeshFans, ViralXXX, XXBrits)."""
+    async def _f(s, q):
+        p = await _get(s, cfg["base"] + cfg["buscar"].format(q=quote_plus(q)))
+        return [(cfg["id"], t, u, img) for u, t, img in
+                _enlaces(p, cfg["base"] + "/", cfg["ficha"])]
+    return _f
+
+
+def _buscador_wp(cfg):
+    """Buscador de un WordPress con MP4 propio (DirtyShip, GotAnyNudes)."""
+    async def _f(s, q):
+        p = await _get(s, cfg["base"] + "/?s=" + quote_plus(q))
+        return [(cfg["id"], t, u, img) for u, t, img in _wp_posts(p, cfg)]
+    return _f
+
+
+BUSCADORES_MANGA = [_hitomi, _hentainexus, _nhentai_to, _nhentai_xxx, _nhentai_website, _3hentai, _hentai2read, _m440,
+                    _hentalk, _tmohentai, _lectorhentai, _imhentai, _allporncomic, _sexkomix2]
+BUSCADORES_CREADORAS = [_erome, _bunkr, _notfans, _fapsly] + \
+    [_buscador_tubo(c) for c in _TUBOS] + [_buscador_wp(c) for c in _WORDPRESS]
+# Todos. El bot usa las dos listas por separado (!buscar y !leak); la web y el agrupador, esta.
+BUSCADORES = BUSCADORES_MANGA + BUSCADORES_CREADORAS
+
+
+# Sitios de creadoras de OnlyFans: su buscador ya filtra por nombre/etiqueta, así que un resultado
+# suyo es relevante aunque el título no repita todas las palabras ("Zen'in Maki Cosplay Hidori..."
+# para "hidori rose"). Se les da una puntuación mínima y un tope por sitio para que un catálogo
+# grande (Bunkr) no tape a los demás.
+CREADORAS = {"erome", "bunkr", "notfans", "fapsly", "thothub", "ultrathots", "sheeshfans",
+             "viralxxxporn", "xxbrits", "dirtyship", "gotanynudes"}
+PUNTUACION_CREADORA = 0.65
+MAX_POR_CREADORA = 6
+
+
+def _creadora_relevante(consulta: str, titulo: str) -> bool:
+    """¿El resultado de un sitio de creadoras casa de verdad con la búsqueda?
+
+    Estos sitios buscan por nombre o etiqueta, así que un título puede no repetir todas las
+    palabras («Hidori R #2» para «hidori rose»): se acepta media consulta. Pero no una sola
+    palabra corta y genérica («wife» en «The Wife-Lenders»), que llenaría la lista de ruido.
+    """
+    todas = normalizar(consulta).split()
+    q = [w for w in todas if w not in VACIAS] or todas
+    if not q:
+        return False
+    en_titulo = set(normalizar(titulo).split()) | set(_normalizar_completo(titulo).split())
+    casan = [w for w in q if w in en_titulo]
+    if not casan:
+        return False
+    if len(casan) == len(q):
+        return True
+    return len(casan) * 2 >= len(q) and max(len(w) for w in casan) >= 5
+
+
+async def buscar(texto: str, minimo: float = 0.6, limite: int = 25,
+                 buscadores: Optional[List] = None) -> List[Resultado]:
+    """Busca en los sitios indicados (por defecto, todos) a la vez. Un sitio caído o lento no
+    bloquea al resto."""
+    buscadores = buscadores or BUSCADORES
     # Variantes de la consulta: tal cual, sin puntuación y solo con las palabras significativas.
     # Cada sitio falla con una distinta: nhentai.to no devuelve nada si la búsqueda lleva "The"
     # ("The Wife Lenders" -> 0, "wife lenders" -> 1).
@@ -330,24 +435,48 @@ async def buscar(texto: str, minimo: float = 0.6, limite: int = 25) -> List[Resu
                 return await f(s, q)
             except Exception:
                 return []
-        listas = await asyncio.gather(*(seguro(f, q) for f in BUSCADORES for q in variantes))
-    resultados, urls = [], set()
+        listas = await asyncio.gather(*(seguro(f, q) for f in buscadores for q in variantes))
+    resultados, urls, por_sitio = [], set(), {}
     for lista in listas:
         for sitio, titulo, url, portada, *pista in lista:
             if url in urls:
                 continue
             p = parecido(texto, titulo)
-            if p == 0 and sitio in ESTRICTOS:
+            if sitio in CREADORAS:
+                if p > 0 and _creadora_relevante(texto, titulo):
+                    p = max(p, PUNTUACION_CREADORA)
+                if por_sitio.get(sitio, 0) >= MAX_POR_CREADORA:
+                    continue
+            elif p == 0 and sitio in ESTRICTOS:
                 # Ninguna palabra en el título: el sitio lo encontró por artista o etiqueta.
                 # (Si casa ALGUNA palabra es una coincidencia parcial de título, p. ej. "The Demon
                 # Wife" para "The Wife-Lenders", y no se rescata.)
                 p = PUNTUACION_POR_ETIQUETA
             if p >= minimo:
                 urls.add(url)
+                por_sitio[sitio] = por_sitio.get(sitio, 0) + 1
                 resultados.append(Resultado(sitio, titulo, url, p, titulo_base(titulo)[1], portada,
                                             idioma_de(titulo, sitio, pista[0] if pista else "")))
     resultados.sort(key=lambda r: (-r.puntuacion, r.numero if r.numero is not None else 1e9, r.sitio))
     return resultados[:limite]
+
+
+async def buscar_creadoras(texto: str, minimo: float = 0.6, limite: int = 60) -> List[Resultado]:
+    """Solo sitios de creadoras de OnlyFans: lo que usa !leak.
+
+    Con tantos sitios, ordenar por puntuación dejaría las primeras páginas llenas de dos o tres
+    sitios (todos empatan). Se intercalan por sitio para que la lista sea variada.
+    """
+    resultados = await buscar(texto, minimo=minimo, limite=200, buscadores=BUSCADORES_CREADORAS)
+    grupos: dict = {}
+    for r in resultados:
+        grupos.setdefault(r.sitio, []).append(r)
+    salida: List[Resultado] = []
+    while any(grupos.values()):
+        for sitio in list(grupos):
+            if grupos[sitio]:
+                salida.append(grupos[sitio].pop(0))
+    return salida[:limite]
 
 
 # ─── Búsqueda por código ("nuclear code") ────────────────────────────────────
@@ -447,8 +576,9 @@ async def version_sin_censura(titulo: str, url_actual: str = "", limite: int = 5
     consulta = consulta_de_titulo(titulo)
     if len(normalizar(consulta)) < 3:
         return consulta, []
-    listas = await asyncio.gather(buscar(consulta, minimo=0.5, limite=100),
-                                  buscar(f"{consulta} uncensored", minimo=0.5, limite=100))
+    listas = await asyncio.gather(buscar(consulta, minimo=0.5, limite=100, buscadores=BUSCADORES_MANGA),
+                                  buscar(f"{consulta} uncensored", minimo=0.5, limite=100,
+                                         buscadores=BUSCADORES_MANGA))
     res, urls = [], set()
     actual = url_actual.rstrip("/")
     for r in (x for lista in listas for x in lista):
@@ -486,7 +616,9 @@ _IDIOMA_HITOMI = {"spanish": "es", "english": "en", "japanese": "ja", "chinese":
                   "thai": "th", "german": "de", "italian": "it"}
 # Sitios que solo publican en un idioma
 _IDIOMA_SITIO = {"tmohentai.app": "es", "lectorhentai": "es", "m440": "es", "hentainexus": "en", "hentai2read": "en",
-                 "hentalk": "en", "allporncomic": "en"}
+                 "hentalk": "en", "allporncomic": "en", "notfans": "en", "fapsly": "en", "thothub": "en",
+                 "ultrathots": "en", "sheeshfans": "en", "viralxxxporn": "en", "xxbrits": "en",
+                 "dirtyship": "en", "gotanynudes": "en"}
 
 BANDERA = {"es": "🇪🇸", "en": "🇬🇧", "ja": "🇯🇵", "zh": "🇨🇳", "ko": "🇰🇷", "vi": "🇻🇳", "ru": "🇷🇺", "pt": "🇧🇷",
            "fr": "🇫🇷", "id": "🇮🇩", "th": "🇹🇭", "de": "🇩🇪", "it": "🇮🇹", None: "🏳️"}
@@ -602,7 +734,7 @@ async def continuaciones(titulo: str, url_actual: str = "") -> Tuple[List[Result
     # Para buscar, el título base legible (sin el número final)
     consulta = re.sub(r"[\s:,.\-]*(?:part|parte|vol\.?|#)?\s*\d+(?:\.\d+)?\s*$", "", titulo.strip(), flags=re.I) or base
     consulta = re.sub(r"\[[^\]]*\]|\([^)]*\)", " ", consulta).strip() or base
-    resultados = await buscar(consulta, minimo=0.8, limite=60)
+    resultados = await buscar(consulta, minimo=0.8, limite=60, buscadores=BUSCADORES_MANGA)
     siguientes, relacionadas, vistos = [], [], set()
     for r in resultados:
         if url_actual and r.url.rstrip("/") == url_actual.rstrip("/"):

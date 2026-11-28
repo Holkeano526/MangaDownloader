@@ -19,7 +19,15 @@ from .sites import (
     SexKomix2Handler,
     AllPornComicHandler,
     IMHentaiHandler,
+    EromeHandler,
+    BunkrHandler,
+    NotFansHandler,
+    FapslyHandler,
+    TuboHandler,
+    WPVideoHandler,
 )
+from .sites.tubos import TUBOS
+from .sites.wpvideos import WORDPRESS
 
 # Instantiate handlers (stateless). Gana el primero cuyo dominio aparezca en la URL.
 HANDLERS = [
@@ -35,7 +43,11 @@ HANDLERS = [
     ShadeMangaHandler(),
     SexKomix2Handler(),
     AllPornComicHandler(),
-]
+    EromeHandler(),
+    BunkrHandler(),
+    NotFansHandler(),
+    FapslyHandler(),
+] + [TuboHandler(cfg) for cfg in TUBOS] + [WPVideoHandler(cfg) for cfg in WORDPRESS]
 
 from urllib.parse import urlparse
 

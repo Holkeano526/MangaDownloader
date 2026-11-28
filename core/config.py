@@ -16,6 +16,7 @@ HEADERS_M440 = {"Referer": "https://m440.in/", "User-Agent": USER_AGENT}
 # Folder Names
 TEMP_FOLDER_NAME = "temp_manga_images"
 PDF_FOLDER_NAME = "PDF"
+MEDIA_FOLDER_NAME = "Media"  # vídeos sueltos (OnlyFans, Bunkr, Erome, NotFans, Fapsly)
 
 # Download Settings
 # Descargas simultáneas de imágenes POR manga. Antes eran tandas de 10 que esperaban

@@ -14,7 +14,8 @@ import uuid
 from typing import List, Optional, Callable
 import json
 
-from .config import PDF_FOLDER_NAME, TEMP_FOLDER_NAME, CONCURRENCIA_IMAGENES, REINTENTOS_IMAGEN, JPEG_CALIDAD
+from .config import (PDF_FOLDER_NAME, TEMP_FOLDER_NAME, MEDIA_FOLDER_NAME, CONCURRENCIA_IMAGENES,
+                     REINTENTOS_IMAGEN, JPEG_CALIDAD)
 from .pdf_worker import preparar_para_pdf as _preparar_para_pdf, generar_pdf as _generar_pdf
 
 def clean_filename(text: str) -> str:
@@ -106,6 +107,84 @@ async def descargar_imagenes(urls: List[str], folder: str, headers: dict, log_ca
 
         resultados = await asyncio.gather(*(una(i + 1, u) for i, u in enumerate(urls)))
     return [r for r in resultados if r]
+
+
+def carpeta_media() -> str:
+    """Carpeta donde se guardan los vídeos descargados (se crea si no existe)."""
+    ruta = os.path.join(os.getcwd(), MEDIA_FOLDER_NAME)
+    os.makedirs(ruta, exist_ok=True)
+    return ruta
+
+
+def nombre_media(titulo: str, extension: str, indice: Optional[int] = None) -> str:
+    """Nombre de archivo para un vídeo: título limpio + extensión (y « - N» si hay varios)."""
+    base = clean_filename(titulo)[:180]
+    if indice is not None:
+        base = f"{base} - {indice}"
+    return f"{base}.{extension.lstrip('.')}"
+
+
+async def descargar_archivo(url: str, destino: str, headers: dict, log_callback: Callable[[str], None],
+                            check_cancel: Optional[Callable[[], bool]] = None,
+                            progreso_cada: int = 10) -> Optional[str]:
+    """Descarga un archivo grande (vídeo) por streaming, con reintentos y cancelación.
+
+    No se guarda en memoria: escribe en `<destino>.part` y renombra al terminar. Avisa del
+    progreso cada `progreso_cada` % para que el embed del bot no se quede parado. Devuelve la
+    ruta final o None. El aviso `[SUCCESS] File Generated: ...` es el que usa el bot para
+    entregar el archivo (igual que `[SUCCESS] PDF Generated:` con los PDF).
+    """
+    os.makedirs(os.path.dirname(destino) or ".", exist_ok=True)
+    parcial = destino + ".part"
+    timeout = aiohttp.ClientTimeout(total=None, connect=20, sock_read=120)
+    motivo = "sin respuesta"
+
+    for intento in range(1, REINTENTOS_IMAGEN + 1):
+        hecho = 0
+        try:
+            async with aiohttp.ClientSession(headers=headers, timeout=timeout) as session:
+                async with session.get(url) as resp:
+                    if resp.status != 200:
+                        motivo = f"HTTP {resp.status}"
+                        if resp.status in (403, 404, 410):
+                            break  # no tiene sentido reintentar
+                    else:
+                        total = int(resp.headers.get("Content-Length") or 0)
+                        siguiente = progreso_cada
+                        with open(parcial, "wb") as f:
+                            async for trozo in resp.content.iter_chunked(1024 * 1024):
+                                if check_cancel and check_cancel():
+                                    f.close()
+                                    os.remove(parcial)
+                                    log_callback("[INFO] Descarga de vídeo cancelada.")
+                                    return None
+                                f.write(trozo)
+                                hecho += len(trozo)
+                                if total:
+                                    pct = int(hecho * 100 / total)
+                                    if pct >= siguiente:
+                                        log_callback(f"[INFO] Descargando vídeo: {pct}%")
+                                        siguiente = (pct // progreso_cada + 1) * progreso_cada
+                        if total and hecho < total:
+                            motivo = f"incompleto ({hecho}/{total} bytes)"
+                        else:
+                            os.replace(parcial, destino)
+                            log_callback(f"[SUCCESS] File Generated: {os.path.abspath(destino)}")
+                            return destino
+        except (aiohttp.ClientError, asyncio.TimeoutError, OSError) as e:
+            motivo = type(e).__name__
+
+        if os.path.exists(parcial):
+            try:
+                os.remove(parcial)
+            except OSError:
+                pass
+        if intento < REINTENTOS_IMAGEN:
+            log_callback(f"[WARN] Descarga de vídeo falló ({motivo}); reintento {intento}/{REINTENTOS_IMAGEN - 1}...")
+            await asyncio.sleep(2 * intento)
+
+    log_callback(f"[ERROR] No se pudo descargar el vídeo: {motivo}")
+    return None
 
 
 def _cpus_disponibles() -> int:

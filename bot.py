@@ -21,6 +21,7 @@ import re
 import aiohttp
 import io
 import json
+import mimetypes
 import tempfile
 import time
 from typing import Optional, Dict
@@ -31,6 +32,7 @@ import core.config
 import mangascan_client
 from core import busqueda
 from core import agrupador
+from core.sites import bunkr as bunkr_site
 from core.handler import obra_desde_enlace
 from urllib.parse import urlparse
 
@@ -101,6 +103,11 @@ class DiscordLogAdapter:
         self.inicio_descarga = None
         self.reintentos = 0      # el servidor pidió esperar (503/429) y se repitió: normal en Hitomi
         self.paginas_perdidas = 0  # páginas que fallaron tras todos los reintentos
+        # Vídeos (leaks): mientras haya uno en curso, la barra muestra su % en vez de páginas
+        self.video_pct = None
+        self.video_indice = 0
+        self.video_total = 0
+        self.video_nombre = ""
         self._ultima_edicion = 0.0
         self._ultima_fase = ""
         self.cancelado = False
@@ -125,7 +132,14 @@ class DiscordLogAdapter:
             color=color or discord.Color.blue(),
         )
         lineas = [f"**{self.fase}**"]
-        if self.total:
+        if self.video_pct is not None:
+            pct = max(0, min(100, self.video_pct))
+            lineas.append(f"`{_barra(pct, 100)}` {pct}%")
+            if self.video_total:
+                cual = f"vídeo {self.video_indice}/{self.video_total}" if self.video_indice else \
+                    f"{self.video_total} vídeo(s)"
+                lineas.append(f"{cual} · {self.video_nombre}" if self.video_nombre else cual)
+        elif self.total:
             lineas.append(f"`{_barra(self.actual, self.total)}` {self.actual}/{self.total} páginas")
             if self.inicio_descarga and self.actual and self.actual < self.total:
                 velocidad = self.actual / max(0.1, time.time() - self.inicio_descarga)
@@ -189,9 +203,11 @@ class DiscordLogAdapter:
             n = int(m.group(1))
             if n and n < 9999:
                 self.total = n
+            self.video_pct = None  # vuelve la fase de páginas (el PDF va antes que los vídeos)
             self.fase = "Descargando páginas..."
             forzar = True
         elif "Generating PDF" in text:
+            self.video_pct = None
             self.fase = "Generando el PDF..."
             if self.total:
                 self.actual = self.total
@@ -200,11 +216,24 @@ class DiscordLogAdapter:
             self.fase = "Abriendo la página..."
         elif "Retrying" in text:
             self.reintentos += 1
+        elif m := re.search(r"Vídeo (\d+)/(\d+): (.+)", text):
+            self.video_indice, self.video_total = int(m.group(1)), int(m.group(2))
+            self.video_nombre = m.group(3).strip()[:80]
+            self.video_pct = 0
+            self.fase = f"Descargando vídeo {self.video_indice}/{self.video_total}..."
+            forzar = True
+        elif m := re.search(r"Descargando vídeo: (\d+)%", text):
+            self.video_pct = int(m.group(1))
+            if self.video_total:
+                self.fase = (f"Descargando vídeo {self.video_indice}/{self.video_total}... "
+                             f"{self.video_pct}%")
+            else:
+                self.fase = f"Descargando vídeo... {self.video_pct}%"
         elif m := re.search(r"(\d+) de \d+ páginas no se pudieron descargar", text):
             self.paginas_perdidas = int(m.group(1))
 
-        # PDF generado: "[SUCCESS] PDF Generated: file.pdf"
-        if m := re.search(r"\[SUCCESS\] PDF Generated: (.*)", text):
+        # Archivo generado: "[SUCCESS] PDF Generated: file.pdf" o "[SUCCESS] File Generated: video.mp4"
+        if m := re.search(r"\[SUCCESS\] (?:PDF|File) Generated: (.*)", text):
             filename = m.group(1).strip()
             if os.path.isabs(filename) and os.path.exists(filename):
                 self.generated_files.append(filename)
@@ -221,8 +250,17 @@ class DiscordLogAdapter:
         duracion = _fmt_tiempo(time.time() - self.inicio)
         if ok:
             tam = sum(os.path.getsize(f) for f in self.generated_files if os.path.exists(f)) / (1024 * 1024)
-            completas = (self.total or 0) - self.paginas_perdidas
-            self.fase = f"Listo en {duracion} · {completas}/{self.total or '?'} páginas · {tam:.1f} MB"
+            pdfs = sum(1 for f in self.generated_files if f.lower().endswith(".pdf"))
+            videos = len(self.generated_files) - pdfs
+            if videos:  # leaks: interesa cuántos vídeos, no las "páginas" del PDF de fotos
+                resumen = (f"{pdfs} PDF · " if pdfs else "") + f"{videos} vídeo(s)"
+                self.fase = f"Listo en {duracion} · {resumen} · {tam:.1f} MB"
+            elif self.total:
+                completas = (self.total or 0) - self.paginas_perdidas
+                self.fase = f"Listo en {duracion} · {completas}/{self.total} páginas · {tam:.1f} MB"
+            else:
+                self.fase = f"Listo en {duracion} · {tam:.1f} MB"
+            self.video_pct = None
             self.actual = self.total
             self.reintentos = 0  # ya no importan: todo llegó (o se avisa de lo que falta)
             color = discord.Color.green() if not self.paginas_perdidas else discord.Color.orange()
@@ -230,7 +268,7 @@ class DiscordLogAdapter:
             await self._editar(True, quitar_boton=True, color=color, titulo=f"{icono} Descargado: {self.titulo or 'manga'}")
         else:
             detalle = "\n".join(l for l in self.logs if "[ERROR]" in l or "[WARN]" in l)[-900:]
-            self.fase = f"No se generó ningún PDF ({duracion})"
+            self.fase = f"No se generó ningún archivo ({duracion})"
             await self._editar(True, quitar_boton=True, color=discord.Color.red(),
                                titulo=f"❌ Falló la descarga: {self.titulo or self.url}"[:250])
             if detalle:
@@ -350,15 +388,18 @@ async def upload_to_gofile(file_path: str) -> Optional[str]:
                 upload_url = f'https://{server}.gofile.io/uploadFile'
             
             filename = os.path.basename(file_path)
+            extension = os.path.splitext(file_path)[1].lower()
             ascii_filename = filename.encode('ascii', 'ignore').decode('ascii').replace(" ", "_")
             # Strip leading punctuation/underscores left by removed non-ASCII chars
             ascii_filename = ascii_filename.lstrip('._- ')
-            if not ascii_filename.replace("_", "").replace(".pdf", ""):
-                ascii_filename = "manga_download.pdf"
+            if not ascii_filename or "." not in ascii_filename:
+                # Un título solo con caracteres no ASCII dejaría un nombre sin extensión
+                ascii_filename = (ascii_filename or "archivo") + extension
 
+            tipo = mimetypes.guess_type(filename)[0] or "application/octet-stream"
             with open(file_path, 'rb') as f:
                 form_data = aiohttp.FormData(quote_fields=False)
-                form_data.add_field('file', f, filename=ascii_filename, content_type='application/pdf')
+                form_data.add_field('file', f, filename=ascii_filename, content_type=tipo)
                 if folder_id:
                     form_data.add_field('folderId', folder_id)
                 
@@ -571,6 +612,11 @@ async def descargar(ctx, url: str):
         await alternativas_sitio_bloqueado(ctx, url, *obra)
         return
 
+    # Un álbum de Bunkr es un recopilatorio: se enseña la lista de vídeos para elegir
+    if _es_album_bunkr(url):
+        await abrir_menu_bunkr(ctx, url)
+        return
+
     logger = DiscordLogAdapter(ctx, url)
     if download_semaphore.locked():
         logger.fase = "En cola (hay 3 descargas en marcha)..."
@@ -607,8 +653,9 @@ async def descargar(ctx, url: str):
         for file_path in logger.generated_files:
             filename = os.path.basename(file_path)
             try:
-                # Discord (8MB safe limit) o GoFile, con botón para traducirlo con MangaScan
-                await _entregar_pdf(ctx.channel, file_path, view=TraducirView(file_path))
+                # Discord (8MB safe limit) o GoFile; el botón de traducir solo tiene sentido con PDF
+                vista = TraducirView(file_path) if file_path.lower().endswith(".pdf") else None
+                await _entregar_pdf(ctx.channel, file_path, view=vista)
             except Exception as e:
                 await ctx.send(f"Error processing file `{filename}`: {e}")
 
@@ -624,7 +671,10 @@ async def descargar(ctx, url: str):
 
 # ─── Búsqueda, autor y continuaciones ─────────────────────────────────────────
 ICONO_SITIO = {"hentainexus": "🟣", "nhentai.to": "🔴", "nhentai.xxx": "🔴", "nhentai.website": "🔴",
-               "tmohentai.app": "🟠", "lectorhentai": "🟢", "hitomi": "🔵", "3hentai": "🟡", "hentai2read": "🟤", "m440": "⚫", "hentalk": "🟦"}
+               "tmohentai.app": "🟠", "lectorhentai": "🟢", "hitomi": "🔵", "3hentai": "🟡", "hentai2read": "🟤", "m440": "⚫", "hentalk": "🟦",
+               "erome": "🟠", "bunkr": "⚫", "notfans": "🔴", "fapsly": "🟣",
+               "thothub": "🟪", "ultrathots": "🟧", "sheeshfans": "🟨", "viralxxxporn": "🟥",
+               "xxbrits": "🔷", "dirtyship": "🟫", "gotanynudes": "🟩"}
 
 
 def _linea_resultado(i: int, r: "busqueda.Resultado") -> str:
@@ -636,7 +686,11 @@ def _linea_resultado(i: int, r: "busqueda.Resultado") -> str:
 
 COLOR_SITIO = {"hentainexus": 0x9b59b6, "nhentai.to": 0xe74c3c, "nhentai.xxx": 0xe74c3c, "nhentai.website": 0xe74c3c,
                "tmohentai.app": 0xe67e22, "lectorhentai": 0x2ecc71, "hitomi": 0x3498db,
-               "3hentai": 0xf1c40f, "hentai2read": 0x8e5a3c, "m440": 0x34495e, "hentalk": 0x1abc9c}
+               "3hentai": 0xf1c40f, "hentai2read": 0x8e5a3c, "m440": 0x34495e, "hentalk": 0x1abc9c,
+               "erome": 0xe67e22, "bunkr": 0x2c3e50, "notfans": 0xe74c3c, "fapsly": 0x9b59b6,
+               "thothub": 0x9b59b6, "ultrathots": 0xe67e22, "sheeshfans": 0xf1c40f,
+               "viralxxxporn": 0xe74c3c, "xxbrits": 0x3498db, "dirtyship": 0x8e5a3c,
+               "gotanynudes": 0x2ecc71}
 
 
 async def _bajar_portada(session: aiohttp.ClientSession, r) -> Optional[tuple]:
@@ -906,7 +960,7 @@ async def buscar_continuacion(ctx, titulo: str, url: str = ""):
 async def buscar_obras_autor(ctx, autor: str, url_actual: str = ""):
     """Todas las obras de un autor en los sitios compatibles (lista paginada de tarjetas)."""
     t0 = time.time()
-    resultados = [r for r in await busqueda.buscar(autor, limite=50)
+    resultados = [r for r in await busqueda.buscar(autor, limite=50, buscadores=busqueda.BUSCADORES_MANGA)
                   if not url_actual or r.url.rstrip("/") != url_actual.rstrip("/")]
     if not resultados:
         await ctx.send(embed=discord.Embed(title=f"✍️ {autor[:200]}",
@@ -1084,7 +1138,8 @@ async def buscar_cmd(ctx, *, texto: Optional[str] = None):
                                                             "imhentai · allporncomic · sexkomix2",
                                                 color=discord.Color.blue()))
     t0 = time.time()
-    resultados = busqueda.ordenar_por_idioma(await busqueda.buscar(texto, limite=50))
+    resultados = busqueda.ordenar_por_idioma(
+        await busqueda.buscar(texto, limite=50, buscadores=busqueda.BUSCADORES_MANGA))
     embed = discord.Embed(title=f"🔎 «{texto[:200]}»", color=discord.Color.blue())
     if not resultados:
         embed.description = "Sin resultados en los sitios compatibles. Prueba con menos palabras o el título en romaji."
@@ -1119,16 +1174,179 @@ async def buscar_cmd(ctx, *, texto: Optional[str] = None):
     vista.mensaje = await ctx.send(content=contenido, embeds=tarjetas, files=archivos, view=vista)
 
 
+@bot.command(name='leak')
+async def leak_cmd(ctx, *, texto: Optional[str] = None):
+    """
+    Busca creadoras/modelos de OnlyFans (Erome, Bunkr, NotFans, Fapsly).
+    Uso: !leak <modelo>   (p. ej. !leak hidori rose)
+    """
+    if not texto or len(texto.strip()) < 3:
+        await ctx.send("Uso: `!leak <modelo>` (mínimo 3 letras). Busca en **Erome · Bunkr · NotFans · Fapsly**. "
+                       "Ejemplo: `!leak hidori rose`.")
+        return
+    texto = texto.strip()
+    espera = await ctx.send(embed=discord.Embed(
+        title=f"🔎 Buscando «{texto[:200]}»...",
+        description="Erome · Bunkr · NotFans · Fapsly (creadoras de OnlyFans)",
+        color=discord.Color.blue()))
+    t0 = time.time()
+    resultados = await busqueda.buscar_creadoras(texto, limite=60)
+    if not resultados:
+        await espera.edit(embed=discord.Embed(
+            title=f"🔎 «{texto[:200]}»", color=discord.Color.blue(),
+            description="Sin resultados en Erome, Bunkr, NotFans ni Fapsly. Prueba con el nombre tal y como "
+                        "aparece en su OnlyFans (p. ej. `!leak hidori rose`) o con menos palabras."))
+        return
+    vista = ResultadosPaginadosView(ctx, texto, resultados, time.time() - t0,
+                                    solo_descarga=True, comando="leak")
+    contenido, tarjetas, archivos = await vista.pagina_actual()
+    try:
+        await espera.delete()
+    except discord.errors.HTTPException:
+        pass
+    vista.mensaje = await ctx.send(content=contenido, embeds=tarjetas, files=archivos, view=vista)
+
+
+def _es_album_bunkr(url: str) -> bool:
+    """Álbum de Bunkr (recopilatorio de varios vídeos), no una ficha /f/<id>."""
+    return bool(re.search(r"(?:bunkr\.[a-z]+|bunkrsearch\.com)", url)) and \
+        bool(re.search(r"/(?:a|albums)/[A-Za-z0-9]+", url))
+
+
+async def abrir_menu_bunkr(ctx, url: str, titulo_respaldo: str = "") -> None:
+    """Enseña los vídeos del álbum para elegir cuáles descargar (no baja las fotos)."""
+    titulo, videos = await bunkr_site.listar_videos(url)
+    titulo = titulo or titulo_respaldo or "Bunkr"
+    if not videos:
+        await ctx.send(f"📂 **{titulo[:150]}**: el álbum no tiene vídeos (las fotos no se descargan).")
+        return
+    vista = BunkrAlbumView(ctx, titulo, videos)
+    vista.mensaje = await ctx.send(content=vista.texto(), view=vista)
+
+
+class BunkrAlbumView(discord.ui.View):
+    """Menú de un álbum de Bunkr: lista paginada de vídeos con selección múltiple."""
+
+    POR_PAGINA = 25
+
+    def __init__(self, ctx, titulo: str, videos):
+        super().__init__(timeout=1800)
+        self.ctx, self.titulo, self.videos = ctx, titulo, videos
+        self.pagina = 0
+        self.paginas = max(1, -(-len(videos) // self.POR_PAGINA))
+        self.elegidos = set()
+        self.descargando = False
+        self.mensaje = None
+        self._montar()
+
+    def texto(self) -> str:
+        return (f"📂 **{self.titulo[:150]}** · {len(self.videos)} vídeo(s) · elige los que quieras descargar\n"
+                f"Página **{self.pagina + 1}/{self.paginas}** · seleccionados: **{len(self.elegidos)}**")
+
+    def _de_la_pagina(self):
+        inicio = self.pagina * self.POR_PAGINA
+        return list(enumerate(self.videos[inicio:inicio + self.POR_PAGINA], start=inicio))
+
+    def _montar(self):
+        self.clear_items()
+        opciones = [discord.SelectOption(
+            label=f"{i + 1}. {nombre}"[:100],
+            description=(f"{tam} · ficha {ficha.rsplit('/', 1)[-1]}" if tam else f"ficha {ficha.rsplit('/', 1)[-1]}")[:100],
+            value=str(i), default=i in self.elegidos)
+            for i, (nombre, ficha, tam) in self._de_la_pagina()]
+        menu = discord.ui.Select(
+            placeholder=f"Vídeos de la página {self.pagina + 1}/{self.paginas} (elige uno o varios)",
+            min_values=0, max_values=max(1, len(opciones)), options=opciones, row=0)
+        menu.callback = self._seleccionar
+        self.add_item(menu)
+        if self.paginas > 1:
+            anterior = discord.ui.Button(label="◀", style=discord.ButtonStyle.secondary, row=1,
+                                         disabled=self.pagina == 0)
+            siguiente = discord.ui.Button(label="▶", style=discord.ButtonStyle.secondary, row=1,
+                                          disabled=self.pagina >= self.paginas - 1)
+            anterior.callback = lambda i: self._ir(i, -1)
+            siguiente.callback = lambda i: self._ir(i, +1)
+            self.add_item(anterior)
+            self.add_item(siguiente)
+        bajar = discord.ui.Button(label=f"📥 Descargar seleccionados ({len(self.elegidos)})",
+                                  style=discord.ButtonStyle.success, row=2,
+                                  disabled=not self.elegidos or self.descargando)
+        bajar.callback = self._descargar
+        self.add_item(bajar)
+
+    def _permitido(self, interaction: discord.Interaction) -> bool:
+        permisos = getattr(interaction.user, "guild_permissions", None)
+        return interaction.user.id == self.ctx.author.id or bool(permisos and permisos.manage_messages)
+
+    async def _seleccionar(self, interaction: discord.Interaction):
+        if not self._permitido(interaction):
+            await interaction.response.send_message("Usa tu propio `!leak` para elegir vídeos.", ephemeral=True)
+            return
+        inicio = self.pagina * self.POR_PAGINA
+        marcados = {int(v) for v in interaction.data.get("values", [])}
+        for i in range(inicio, min(inicio + self.POR_PAGINA, len(self.videos))):
+            (self.elegidos.add if i in marcados else self.elegidos.discard)(i)
+        self._montar()
+        await interaction.response.edit_message(content=self.texto(), view=self)
+
+    async def _ir(self, interaction: discord.Interaction, paso: int):
+        if not self._permitido(interaction):
+            await interaction.response.send_message("Usa tu propio `!leak` para pasar de página.", ephemeral=True)
+            return
+        self.pagina = min(max(0, self.pagina + paso), self.paginas - 1)
+        self._montar()
+        await interaction.response.edit_message(content=self.texto(), view=self)
+
+    async def _descargar(self, interaction: discord.Interaction):
+        if not self._permitido(interaction):
+            await interaction.response.send_message("Usa tu propio `!leak` para descargar.", ephemeral=True)
+            return
+        if self.descargando:
+            await interaction.response.send_message("Ya se están descargando.", ephemeral=True)
+            return
+        items = [self.videos[i] for i in sorted(self.elegidos)]
+        if not items:
+            await interaction.response.send_message("No has elegido ningún vídeo.", ephemeral=True)
+            return
+        self.descargando = True
+        self._montar()
+        await interaction.response.edit_message(content=self.texto(), view=self)
+        await interaction.channel.send(f"📥 Descargando {len(items)} vídeo(s) de **{self.titulo[:150]}**...")
+        bot.loop.create_task(_bajar_seleccion_bunkr(self.ctx, self.titulo, items))
+
+
+async def _bajar_seleccion_bunkr(ctx, titulo: str, items) -> None:
+    """Descarga los vídeos elegidos en el menú de un álbum, con el embed de progreso."""
+    logger = DiscordLogAdapter(ctx, items[0][1])
+    logger.titulo = titulo
+    await logger.initialize()
+    try:
+        async with download_semaphore:
+            await bunkr_site.descargar_videos(titulo, items, logger.log_callback, logger.check_cancel)
+        await logger.finalizar(bool(logger.generated_files))
+        for ruta in logger.generated_files:
+            try:
+                await _entregar_pdf(ctx.channel, ruta)
+            except Exception as e:
+                await ctx.send(f"Error al entregar `{os.path.basename(ruta)}`: {e}")
+    except Exception as e:
+        await ctx.send(f"Error al descargar el álbum: {e}")
+
+
 class ResultadosPaginadosView(discord.ui.View):
     """Resultados de !buscar en páginas de 10 tarjetas (el máximo de Discord por mensaje), con
     ◀ ▶ para pasar de página y un menú para descargar cualquiera de la página actual."""
 
     POR_PAGINA = 10
 
-    def __init__(self, ctx, texto: str, resultados, segundos: float, nota: str = ""):
+    def __init__(self, ctx, texto: str, resultados, segundos: float, nota: str = "",
+                 solo_descarga: bool = False, comando: str = "buscar"):
         super().__init__(timeout=1800)
         self.ctx, self.texto, self.resultados, self.segundos = ctx, texto, resultados, segundos
         self.nota = nota  # línea extra bajo la cabecera (p. ej. el aviso de la búsqueda por código)
+        # !leak: solo descargar (no tiene sentido «continuación», «autor» ni «sin censura»)
+        self.solo_descarga = solo_descarga
+        self.comando = comando
         self.pagina = 0
         self.paginas = max(1, -(-len(resultados) // self.POR_PAGINA))
         self.mensaje = None
@@ -1150,18 +1368,19 @@ class ResultadosPaginadosView(discord.ui.View):
         )
         menu.callback = self._elegido
         self.add_item(menu)
-        for fila, (texto, callback) in enumerate((("🔎 Buscar continuación de…", self._continuacion),
-                                                 ("✍️ Más obras del autor de…", self._autor),
-                                                 ("🔓 Buscar versión sin censura de…", self._sin_censura)), start=2):
-            extra = discord.ui.Select(
-                placeholder=texto,
-                options=[discord.SelectOption(label=f"{i}. {r.titulo}"[:100], value=str(i - 1),
-                                              description=r.sitio[:100])
-                         for i, r in enumerate(self._de_la_pagina(), start=inicio + 1)],
-                row=fila,
-            )
-            extra.callback = callback
-            self.add_item(extra)
+        if not self.solo_descarga:
+            for fila, (texto, callback) in enumerate((("🔎 Buscar continuación de…", self._continuacion),
+                                                     ("✍️ Más obras del autor de…", self._autor),
+                                                     ("🔓 Buscar versión sin censura de…", self._sin_censura)), start=2):
+                extra = discord.ui.Select(
+                    placeholder=texto,
+                    options=[discord.SelectOption(label=f"{i}. {r.titulo}"[:100], value=str(i - 1),
+                                                  description=r.sitio[:100])
+                             for i, r in enumerate(self._de_la_pagina(), start=inicio + 1)],
+                    row=fila,
+                )
+                extra.callback = callback
+                self.add_item(extra)
         if self.paginas > 1:
             anterior = discord.ui.Button(label="◀ Anterior", style=discord.ButtonStyle.secondary,
                                          disabled=self.pagina == 0, row=1)
@@ -1173,6 +1392,16 @@ class ResultadosPaginadosView(discord.ui.View):
             self.add_item(siguiente)
 
     async def pagina_actual(self):
+        if self.solo_descarga:
+            sitios = " · ".join(sorted({r.sitio for r in self.resultados}))
+            contenido = (f"🔎 **«{self.texto[:200]}»** · {len(self.resultados)} resultado(s) · "
+                         f"{self.segundos:.1f}s · página **{self.pagina + 1}/{self.paginas}**\n"
+                         f"OnlyFans leaks · {sitios}")
+            if self.nota:
+                contenido += f"\n{self.nota}"
+            tarjetas, archivos = await tarjetas_resultados(self._de_la_pagina(),
+                                                           desde=self.pagina * self.POR_PAGINA + 1)
+            return contenido[:2000], tarjetas, archivos
         cuenta = {}
         for r in self.resultados:
             cuenta[r.idioma] = cuenta.get(r.idioma, 0) + 1
@@ -1192,7 +1421,8 @@ class ResultadosPaginadosView(discord.ui.View):
 
     async def _ir(self, interaction: discord.Interaction, paso: int):
         if not self._permitido(interaction):
-            await interaction.response.send_message("Usa tu propio !buscar para pasar de página.", ephemeral=True)
+            await interaction.response.send_message(f"Usa tu propio !{self.comando} para pasar de página.",
+                                                    ephemeral=True)
             return
         self.pagina = min(max(0, self.pagina + paso), self.paginas - 1)
         await interaction.response.defer()  # las portadas tardan un poco en descargarse
@@ -1202,9 +1432,14 @@ class ResultadosPaginadosView(discord.ui.View):
 
     async def _elegido(self, interaction: discord.Interaction):
         if not self._permitido(interaction):
-            await interaction.response.send_message("Usa tu propio !buscar para descargar.", ephemeral=True)
+            await interaction.response.send_message(f"Usa tu propio !{self.comando} para descargar.", ephemeral=True)
             return
         r = self.resultados[int(interaction.data["values"][0])]
+        if _es_album_bunkr(r.url):
+            await interaction.response.send_message(
+                f"📂 Leyendo el álbum **{r.titulo[:150]}** para enseñarte sus vídeos...")
+            bot.loop.create_task(abrir_menu_bunkr(self.ctx, r.url, r.titulo))
+            return
         await interaction.response.send_message(f"📥 Descargando **{r.titulo[:150]}** de `{r.sitio}`...")
         bot.loop.create_task(self.ctx.invoke(descargar, url=r.url))
 

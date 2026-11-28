@@ -1,7 +1,8 @@
 # MangaDownloader
 
-Descarga mangas, doujinshi y cómics de **14 sitios** a PDF, **busca en todos a la vez**, agrupa las partes de una
-serie con IA (DeepSeek) y, con un botón, **los traduce** con [MangaScan AI](https://github.com/Holkeano526/mangascan).
+Descarga mangas, doujinshi y cómics a PDF y **contenido de creadoras de OnlyFans** de **25 sitios** (los vídeos
+a MP4), **busca en todos a la vez** con `!buscar` (manga) y `!leak` (creadoras), agrupa las partes de una serie
+con IA (DeepSeek) y, con un botón, **los traduce** con [MangaScan AI](https://github.com/Holkeano526/mangascan).
 
 Se usa sobre todo como **bot de Discord** (corre en un NAS con Docker), pero el mismo núcleo (`core/`) sirve
 también a una interfaz web (Next.js + FastAPI) y a una app de escritorio (Tkinter).
@@ -12,7 +13,7 @@ MangaDownloader y MangaScan AI son **dos repos hermanos**: se desarrollan y desp
 
 | Repo | Qué hace | En el NAS |
 |---|---|---|
-| [**MangaDownloader**](https://github.com/Holkeano526/MangaDownloader) | Descarga a PDF desde 14 sitios, `!buscar` en todos a la vez, agrupación de series con DeepSeek. Bot de Discord, web y escritorio | `manga_discord_bot` (receta OMV `manga-downloader`) |
+| [**MangaDownloader**](https://github.com/Holkeano526/MangaDownloader) | Descarga a PDF/MP4 desde 25 sitios, `!buscar` en todos a la vez, agrupación de series con DeepSeek. Bot de Discord, web y escritorio | `manga_discord_bot` (receta OMV `manga-downloader`) |
 | [**MangaScan AI**](https://github.com/Holkeano526/mangascan) | Traduce el PDF al español latino: detección y borrado en la iGPU, OCR y DeepSeek | `mangascan-ai`, puerto `8001` |
 
 **Contrato entre los dos** (`mangascan_client.py` en MangaDownloader ↔ API de MangaScan):
@@ -58,9 +59,10 @@ MangaDownloader y MangaScan AI son **dos repos hermanos**: se desarrollan y desp
 | Comando | Qué hace |
 |---|---|
 | `!descargar <url>` | Descarga a PDF. Acepta una ficha, un lector o una serie (pone sus capítulos en cola). Con un código numérico (`!descargar 177013`) **no descarga directo**: muestra las mismas opciones que `!buscar 177013` para que elijas el sitio. |
-| `!buscar <título>` | Busca ese título en los 14 sitios y agrupa con DeepSeek en series › partes › fuentes (🇪🇸 primero, luego 🇬🇧). Si la IA falla, muestra una lista paginada de tarjetas con portada. Funciona sin número de parte: `!buscar The Wife-Lenders`. **No** suma las demás obras del autor: eso se pide con *Más obras del autor*. |
+| `!buscar <título>` | Busca ese título en los **14 sitios de manga** y agrupa con DeepSeek en series › partes › fuentes (🇪🇸 primero, luego 🇬🇧). Si la IA falla, muestra una lista paginada de tarjetas con portada. Funciona sin número de parte: `!buscar The Wife-Lenders`. **No** suma las demás obras del autor: eso se pide con *Más obras del autor*. |
 | `!buscar <código>` | Código numérico de nhentai / Hitomi ("nuclear code"): `!buscar 177013` o `!buscar #177013`. Ver [Búsqueda por código](#búsqueda-por-código). |
 | `!buscar <título> uncensored` | Solo las versiones **sin censura** de esa obra (también vale `decensored` o `sin censura`). Ver [Versión sin censura](#versión-sin-censura). |
+| `!leak <modelo>` | Busca creadoras de OnlyFans en **Erome · Bunkr · NotFans · Fapsly · ThotHub · Ultrathots · SheeshFans · ViralXXX · XXBrits · DirtyShip · GotAnyNudes**: `!leak hidori rose`. Lista paginada con portadas; un menú descarga **solo vídeos** (MP4) y el embed muestra el progreso de cada uno (`vídeo 3/35` y su %). En un álbum de Bunkr se abre un **menú con sus vídeos** para elegir cuáles bajar. |
 | `!traducir <enlace GoFile \| nombre.pdf>` | Traduce con MangaScan un PDF que el bot ya descargó (por su enlace de GoFile o su nombre). También acepta un PDF adjunto al mensaje. |
 | `!help` | Ayuda. |
 
@@ -95,7 +97,7 @@ Muchas obras tienen una versión *uncensored* / *decensored* / *sin censura*. Se
 tarjetas.
 
 Buscar la palabra «uncensored» a secas devuelve cualquier obra sin censura, así que el bot busca **el título
-de la obra** (sin etiquetas como `[English]` ni el título alternativo) en los 14 sitios, solo y con
+de la obra** (sin etiquetas como `[English]` ni el título alternativo) en los 14 sitios de manga, solo y con
 «uncensored», y se queda con los resultados que:
 
 - lo marcan en el título: `(Uncensored)`, `[Decensored]`, `(Sin Censura)`, `(DC)`, `無修正`… En Hitomi también
@@ -107,6 +109,9 @@ Si no hay ninguna, el bot lo dice. Depende del buscador de cada sitio: si un sit
 por su título, tampoco encontrará su versión sin censura.
 
 ## Sitios compatibles
+
+`!buscar` usa los sitios de manga; `!leak` usa los de creadoras (Erome, Bunkr, NotFans, Fapsly y los tubos
+de leaks). En los sitios de creadoras **solo se descargan vídeos**; las fotos se ignoran.
 
 | Sitio | Descarga | Búsqueda | Cómo |
 |---|:-:|:-:|---|
@@ -122,6 +127,24 @@ por su título, tampoco encontrará su versión sin censura.
 | imhentai.xxx | ✅ | ✅ | HTTP: servidor, carpeta y extensión de cada página en la ficha (`load_*`, `g_th`) |
 | allporncomic.com | ✅ | ✅ | HTTP (WordPress Madara). Un cómic o un artista ponen sus capítulos en cola |
 | sexkomix2.com | ✅ | ✅ | HTTP; busca en español e inglés. Un estudio o una categoría ponen sus cómics en cola |
+| erome.com | ✅ | ✅ | HTTP: álbumes de vídeos → MP4 (las fotos se ignoran). Un perfil pone sus álbumes en cola |
+| bunkr.cr (+ espejos) · bunkrsearch.com | ✅ | ✅ | HTTP: API pública de descarga del sitio. Solo vídeos; un álbum abre un **menú** para elegir cuáles bajar |
+| notfans.vip · notfans.com | ✅ | ✅ | HTTP: vídeos de creadoras → MP4. Una etiqueta, modelo o búsqueda pone sus vídeos en cola |
+| fapsly.net | ✅ | ✅ | HTTP: solo vídeos de los posts → MP4. Una creadora pone sus posts en cola |
+| thothub.to | ✅ | ✅ | HTTP (KVS): `video_url`/`video_alt_url` → MP4 |
+| ultrathots.com | ✅ | ✅ | HTTP (KVS): vídeos → MP4 |
+| sheeshfans.com | ✅ | ✅ | HTTP (KVS): vídeos → MP4 |
+| viralxxxporn.com | ✅ | ✅ | HTTP (KVS): vídeos → MP4 |
+| xxbrits.com | ✅ | ✅ | HTTP (KVS): vídeos → MP4 |
+| dirtyship.com | ✅ | ✅ | HTTP (WordPress): `<source>` MP4 propio. Las galerías de fotos se omiten |
+| gotanynudes.com | ✅ | ✅ | HTTP (WordPress): MP4 en `ares.gotanynudes.com`. Las galerías se omiten |
+| fapello.com · pimpbunny.com | ❌ | — | Desafío/anti-bot (403): **no se esquiva** |
+| ixxx.com | ❌ | — | Cloudflare (403 «Just a moment…») en todas sus rutas: **no se esquiva** |
+| erothots.is · leakshaven.com · bitchesgirls.com | ❌ | — | La búsqueda y el contenido se cargan por JS: el HTML no trae enlaces de vídeo |
+| thothd.com | ❌ | — | Sus resultados de búsqueda dan 404 en la ficha |
+| hornyleak.tv | ❌ | — | El vídeo va por un player HLS y el contenedor no tiene `ffmpeg` para unir segmentos |
+| coomer.st | ❌ | — | Su API no devuelve archivos de vídeo y la web es una SPA |
+| amateurdoporn.com | ❌ | — | Los resultados de búsqueda se pintan por JS |
 | shademanga | ✅ | — | Navegador |
 | nhentai.net · nhentai.top | ⚠️ | — | Protegidos por Cloudflare: el bot avisa y sugiere un espejo. **No se intenta saltar la protección.** |
 | chochox.com · vercomicsporno.com | 🔁 | — | Desafío de Cloudflare en todas sus páginas: no se les pide nada. `!descargar` con un enlace suyo saca el título (y el artista) del propio enlace y ofrece **la misma obra en los sitios compatibles**. |

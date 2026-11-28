@@ -12,3 +12,9 @@ from .shademanga import ShadeMangaHandler
 from .sexkomix2 import SexKomix2Handler
 from .allporncomic import AllPornComicHandler
 from .imhentai import IMHentaiHandler
+from .erome import EromeHandler
+from .bunkr import BunkrHandler
+from .notfans import NotFansHandler
+from .fapsly import FapslyHandler
+from .tubos import TuboHandler
+from .wpvideos import WPVideoHandler
