@@ -63,6 +63,7 @@ MangaDownloader y MangaScan AI son **dos repos hermanos**: se desarrollan y desp
 | `!buscar <código>` | Código numérico de nhentai / Hitomi ("nuclear code"): `!buscar 177013` o `!buscar #177013`. Ver [Búsqueda por código](#búsqueda-por-código). |
 | `!buscar <título> uncensored` | Solo las versiones **sin censura** de esa obra (también vale `decensored` o `sin censura`). Ver [Versión sin censura](#versión-sin-censura). |
 | `!leak <modelo>` | Busca creadoras de OnlyFans en **Erome · Bunkr · NotFans · Fapsly · ThotHub · Ultrathots · SheeshFans · ViralXXX · XXBrits · DirtyShip · GotAnyNudes**: `!leak hidori rose`. Lista paginada con portadas; un menú descarga **solo vídeos** (MP4) y el embed muestra el progreso de cada uno (`vídeo 3/35` y su %). En un álbum de Bunkr se abre un **menú con sus vídeos** para elegir cuáles bajar. |
+| `!twitter <enlace del tuit>` | Descarga los vídeos de un tuit **público** de X/Twitter (también `!x`, y `!descargar` con el enlace). Acepta x.com, twitter.com y los espejos fxtwitter/vxtwitter/fixupx. Un MP4 por vídeo, a la mejor calidad directa; si pasa del límite de Discord va a GoFile. Los tuits que piden iniciar sesión (contenido sensible, cuentas protegidas) no se descargan. |
 | `!traducir <enlace GoFile \| nombre.pdf>` | Traduce con MangaScan un PDF que el bot ya descargó (por su enlace de GoFile o su nombre). También acepta un PDF adjunto al mensaje. |
 | `!help` | Ayuda. |
 

@@ -11,6 +11,7 @@ from .hentalk import HentalkHandler
 from .shademanga import ShadeMangaHandler
 from .sexkomix2 import SexKomix2Handler
 from .allporncomic import AllPornComicHandler
+from .twitter import TwitterHandler
 from .imhentai import IMHentaiHandler
 from .erome import EromeHandler
 from .bunkr import BunkrHandler

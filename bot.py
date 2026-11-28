@@ -34,7 +34,8 @@ import mangascan_client
 from core import busqueda
 from core import agrupador
 from core.sites import bunkr as bunkr_site
-from core.handler import obra_desde_enlace
+from core.handler import obra_desde_enlace, host_de_url, dominio_coincide
+from core.sites.twitter import DOMINIOS as DOMINIOS_TWITTER
 from core.utils import limpiar_temporales_huerfanos
 from bot_gofile import _entregar_pdf, _pdf_de_gofile, pdf_traducible, registrar_pdf_traducible
 from urllib.parse import urlparse
@@ -1091,6 +1092,21 @@ async def buscar_por_codigo(ctx, codigo: int):
     except discord.errors.HTTPException:
         pass
     vista.mensaje = await ctx.send(content=contenido, embeds=tarjetas, files=archivos, view=vista)
+
+
+@bot.command(name='twitter', aliases=['x'])
+async def twitter_cmd(ctx, url: str):
+    """
+    Descarga los vídeos de un tuit público de X/Twitter.
+    Uso: !twitter <enlace del tuit>   (también !x)
+    """
+    url = url.strip().strip("<>")
+    host = host_de_url(url)
+    if not host or not any(dominio_coincide(host, d) for d in DOMINIOS_TWITTER):
+        await ctx.send("Pásame el enlace de un tuit, por ejemplo `!twitter https://x.com/usuario/status/123...`")
+        return
+    # Mismo flujo que !descargar (embed de progreso, cola, cancelar y entrega por Discord o GoFile)
+    await ctx.invoke(descargar, url=url)
 
 
 @bot.command(name='buscar')
